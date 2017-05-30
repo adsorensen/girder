@@ -1,4 +1,4 @@
-@import 'nib'
+@import '~nib/index.styl'
 
 .g-access-modal-body
   padding-top 10px
@@ -6,6 +6,9 @@
 
 .g-public-container
   margin-bottom 16px
+
+  .g-action-manage-public-flags
+    margin-left 20px
 
   .radio
     margin-top 0
@@ -24,6 +27,21 @@
   color white
   font-weight bold
   padding 3px 10px
+
+i.g-flag-icon
+  position relative
+
+.g-flag-count-indicator
+  display inline-block
+  border-radius 3px
+  background-color #c80000
+  color white
+  position absolute
+  font-size 9px
+  bottom -4px
+  right -1px
+  padding 0 0.3em
+  font-style normal
 
 .g-ac-list
   border 1px solid #d7d7d7
@@ -59,14 +77,21 @@
     display inline-block
     vertical-align top
 
-    .g-action-remove-access
-      color #999
-      margin-left 14px
-      font-size 16px
+    .g-access-action-container
+      margin-left 9px
       display inline-block
-      vertical-align middle
 
-      &:hover
+      a
+        font-size 16px
+        display inline-block
+        vertical-align middle
+        color #999
+        margin-left 5px
+
+      .g-action-manage-flags:hover
+        color #0e84b5
+
+      .g-action-remove-access:hover
         color #d02344
 
     select

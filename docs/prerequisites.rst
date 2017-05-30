@@ -40,7 +40,7 @@ Debian / Ubuntu
 
 Install the prerequisites using APT: ::
 
-    sudo apt-get install curl g++ git libffi-dev make python-dev python-pip libjpeg-dev zlib1g-dev
+    sudo apt-get install curl g++ git libffi-dev make python-dev python-pip libssl-dev libjpeg-dev zlib1g-dev
 
 MongoDB 2.6 requires a special incantation to install at this time. Install
 the APT key with the following: ::
@@ -62,13 +62,41 @@ Reload the package database and install MongoDB server using APT: ::
     sudo apt-get update
     sudo apt-get install mongodb-org-server
 
+With Ubuntu 16.04, create a systemd init script at
+
+``/lib/systemd/system/mongod.service``: ::
+
+  [Unit]
+  Description=High-performance, schema-free document-oriented database
+  After=network.target
+  Documentation=https://docs.mongodb.org/manual
+
+  [Service]
+  User=mongodb
+  Group=mongodb
+  ExecStart=/usr/bin/mongod --quiet --config /etc/mongod.conf
+
+  [Install]
+  WantedBy=multi-user.target
+
+and start it with: ::
+
+  sudo service mongod start
+
 Enable the Node.js APT repository: ::
 
-    curl -sL https://deb.nodesource.com/setup_4.x | sudo bash -
+    curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
 
 Install Node.js and NPM using APT: ::
 
     sudo apt-get install nodejs
+
+.. note:: It's recommended to get the latest version of the npm package manager, and Girder currently
+   requires at least version 3 of npm. To upgrade to the latest npm, run: ::
+
+      npm install -g npm
+
+   This may need to be run as root using ``sudo``.
 
 .. _centos-fedora-rhel:
 
@@ -83,7 +111,7 @@ YUM repository: ::
 
 Install the prerequisites using YUM: ::
 
-   sudo yum install curl gcc-c++ git libffi-devel make python-devel python-pip libjpeg-turbo-devel zlib-devel
+   sudo yum install curl gcc-c++ git libffi-devel make python-devel python-pip openssl-devel libjpeg-turbo-devel zlib-devel
 
 Create a file ``/etc/yum.repos.d/mongodb.repo`` that contains the following
 configuration information for the MongoDB YUM repository:
@@ -102,7 +130,7 @@ Install MongoDB server using YUM: ::
 
 Enable the Node.js YUM repository: ::
 
-    curl -sL https://rpm.nodesource.com/setup_4.x | sudo bash -
+    curl --silent --location https://rpm.nodesource.com/setup_6.x | bash -
 
 Install Node.js and NPM using YUM: ::
 

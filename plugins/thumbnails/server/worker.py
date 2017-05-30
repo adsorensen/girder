@@ -17,16 +17,13 @@
 #  limitations under the License.
 ###############################################################################
 
+from bson.objectid import ObjectId
 import functools
 import six
 import sys
 import traceback
 import dicom
-try:
-    import numpy as np
-    numpy = True
-except ImportError:
-    numpy = False
+import numpy as np
 
 from girder import events
 from girder.plugins.jobs.constants import JobStatus
@@ -119,8 +116,9 @@ def createThumbnail(width, height, crop, fileId, attachToType, attachToId):
     out.seek(0)
 
     thumbnail = uploadModel.uploadFromFile(
-        out, size=size, name='_thumb.jpg', parentType=None, parent=None,
-        user=None, mimeType='image/jpeg')
+        out, size=size, name='_thumb.jpg', parentType=attachToType,
+        parent={'_id': ObjectId(attachToId)}, user=None, mimeType='image/jpeg',
+        attachParent=True)
 
     return attachThumbnail(
         file, thumbnail, attachToType, attachToId, width, height)
@@ -173,8 +171,6 @@ def _getImage(mimeType, extension, data):
     :param data: The image file stream.
     """
     if (extension and extension[-1] == 'dcm') or mimeType == 'application/dicom':
-        if not numpy:
-            raise Exception('Could not create DICOM thumbnail: numpy not installed.')
         # Open the dicom image
         dicomData = dicom.read_file(six.BytesIO(data))
         return scaleDicomLevels(dicomData)

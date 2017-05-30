@@ -1,4 +1,4 @@
-FROM node:4.4.5
+FROM node:6
 MAINTAINER Patrick Reynolds <patrick.reynolds@kitware.com>
 
 EXPOSE 8080
@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -qy software-properties-common python-soft
     build-essential \
     git \
     libffi-dev \
+    libsasl2-dev \
+    libldap2-dev \
     libpython-dev && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -28,7 +30,6 @@ COPY package.json /girder/package.json
 COPY README.rst /girder/README.rst
 
 RUN pip install -e .[plugins]
+RUN girder-install web --all-plugins
 
-RUN npm install -g grunt-cli && npm cache clear
-RUN npm install --production --unsafe-perm && npm cache clear
 ENTRYPOINT ["python", "-m", "girder"]

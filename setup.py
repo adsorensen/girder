@@ -17,11 +17,11 @@
 #  limitations under the License.
 ###############################################################################
 
-import json
 import os
 import re
 import shutil
 import sys
+import itertools
 
 from setuptools import setup, find_packages
 from setuptools.command.install import install
@@ -50,10 +50,11 @@ class InstallWithOptions(install):
         shutil.copy('package.json', dest)
         self.mergeDir(os.path.join('clients', 'web', 'src'), dest)
         self.mergeDir(os.path.join('clients', 'web', 'static'), dest)
-        shutil.copy(os.path.join('clients', 'web', 'fontello.config.json'),
-                    os.path.join(dest, 'clients', 'web'))
+        shutil.copy(os.path.join('clients', 'web', 'src', 'assets', 'fontello.config.json'),
+                    os.path.join(dest, 'clients', 'web', 'src', 'assets'))
         self.mergeDir('grunt_tasks', dest)
         self.mergeDir('plugins', dest)
+        self.mergeDir('scripts', dest)
 
 with open('README.rst') as f:
     readme = f.read()
@@ -62,6 +63,8 @@ install_reqs = [
     'bcrypt',
     'boto',
     'CherryPy',
+    'filelock',
+    'jsonschema',
     'Mako',
     'pymongo>=3',
     'PyYAML',
@@ -74,13 +77,18 @@ install_reqs = [
 
 extras_reqs = {
     'celery_jobs': ['celery'],
+    'dicom_viewer': ['pydicom'],
     'geospatial': ['geojson'],
-    'thumbnails': ['Pillow', 'pydicom'],
-    'worker': ['celery'],
-    'plugins': ['celery', 'geojson', 'Pillow', 'pydicom']
+    'item_tasks': ['ctk-cli'],
+    'ldap': ['pyldap'],
+    'thumbnails': ['Pillow', 'pydicom', 'numpy'],
+    'worker': ['celery']
 }
+all_extra_reqs = itertools.chain.from_iterable(extras_reqs.values())
+extras_reqs['plugins'] = list(set(all_extra_reqs))
 
 if sys.version_info[0] == 2:
+    install_reqs.append('shutilwhich')
     extras_reqs.update({
         'hdfs_assetstore': ['snakebite'],
         'metadata_extractor': [
@@ -95,6 +103,8 @@ if sys.version_info[0] == 2:
             'hachoir-parser'
         ]
     })
+
+extras_reqs['sftp'] = ['paramiko']
 
 init = os.path.join(os.path.dirname(__file__), 'girder', '__init__.py')
 with open(init) as fd:
@@ -132,7 +142,7 @@ setup(
             'conf/girder.dist.cfg',
             'mail_templates/*.mako',
             'mail_templates/**/*.mako',
-            'utility/webroot.mako',
+            'utility/*.mako',
             'api/api_docs.mako'
         ]
     },
@@ -145,7 +155,8 @@ setup(
     entry_points={
         'console_scripts': [
             'girder-server = girder.__main__:main',
-            'girder-install = girder.utility.install:main'
+            'girder-install = girder.utility.install:main',
+            'girder-sftpd = girder.api.sftp:_main'
         ]
     }
 )

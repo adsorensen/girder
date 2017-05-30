@@ -53,8 +53,7 @@ class FolderTestCase(base.TestCase):
             'lastName': 'Last',
             'password': 'goodpassword'
         })
-        self.admin, self.user =\
-            [self.model('user').createUser(**user) for user in users]
+        self.admin, self.user = [self.model('user').createUser(**user) for user in users]
 
     def testChildFolders(self):
         # Test with some bad parameters
@@ -67,8 +66,9 @@ class FolderTestCase(base.TestCase):
             'parentId': self.admin['_id']
         })
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'],
-                         'The parentType must be user, collection, or folder.')
+        self.assertEqual(
+            resp.json['message'],
+            'Invalid value for parentType: "invalid". Allowed values: folder, user, collection.')
 
         # We should only be able to see the public folder if we are anonymous
         resp = self.request(path='/folder', method='GET', params={
@@ -296,12 +296,10 @@ class FolderTestCase(base.TestCase):
                             method='PUT', user=self.admin,
                             body=json.dumps(metadata), type='application/json')
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'],
-                         'The key name foo.bar must not contain a period' +
-                         ' or begin with a dollar sign.')
+        self.assertEqual(
+            resp.json['message'], 'Invalid key foo.bar: keys must not contain the "." character.')
 
-        # Make sure metadata cannot be added if the key begins with a
-        # dollar sign
+        # Make sure metadata cannot be added if the key begins with a $
         metadata = {
             '$foobar': 'alsonotallowed'
         }
@@ -309,9 +307,26 @@ class FolderTestCase(base.TestCase):
                             method='PUT', user=self.admin,
                             body=json.dumps(metadata), type='application/json')
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'],
-                         'The key name $foobar must not contain a period' +
-                         ' or begin with a dollar sign.')
+        self.assertEqual(
+            resp.json['message'],
+            'Invalid key $foobar: keys must not start with the "$" character.')
+
+        # Test allowNull
+        metadata = {
+            'foo': None
+        }
+        resp = self.request(
+            path='/folder/%s/metadata' % folder['_id'], params={'allowNull': True},
+            user=self.admin, method='PUT', body=json.dumps(metadata), type='application/json')
+        self.assertStatusOk(resp)
+        self.assertEqual(resp.json['meta'], metadata)
+
+        # Test delete metadata endpoint
+        resp = self.request(
+            path='/folder/%s/metadata' % folder['_id'], user=self.admin, method='DELETE',
+            body=json.dumps(['foo']), type='application/json')
+        self.assertStatusOk(resp)
+        self.assertEqual(resp.json['meta'], {})
 
     def testDeleteFolder(self):
         cbInfo = {}
@@ -429,7 +444,7 @@ class FolderTestCase(base.TestCase):
         # fields
         del folder['lowerName']
         del folder['baseParentType']
-        self.model('folder').save(folder, validate=False)
+        folder = self.model('folder').save(folder, validate=False)
 
         folder = self.model('folder').find({'_id': folder['_id']})[0]
         self.assertNotHasKeys(folder, ('lowerName', 'baseParentType'))
@@ -492,6 +507,7 @@ class FolderTestCase(base.TestCase):
                 'login': self.admin['login'],
                 'level': AccessType.ADMIN,
                 'id': str(self.admin['_id']),
+                'flags': [],
                 'name': '%s %s' % (
                     self.admin['firstName'], self.admin['lastName'])}],
             'groups': []

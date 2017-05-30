@@ -17,21 +17,22 @@
 #  limitations under the License.
 ###############################################################################
 
+import cgi
 import cherrypy
 import collections
 import datetime
 import json
+import posixpath
 import six
 import sys
 import traceback
 
 from . import docs
-from girder import events, logger
-from girder.constants import SettingKey, TerminalColor, TokenScope, SortDir
-from girder.models.model_base import AccessException, GirderException, \
-    ValidationException
+from girder import events, logger, logprint
+from girder.constants import SettingKey, TokenScope, SortDir
+from girder.models.model_base import AccessException, GirderException, ValidationException
 from girder.utility.model_importer import ModelImporter
-from girder.utility import config, JsonEncoder
+from girder.utility import toBool, config, JsonEncoder
 from six.moves import range, urllib
 
 # Arbitrary buffer length for stream-reading request bodies
@@ -59,21 +60,34 @@ def getUrlParts(url=None):
     return urllib.parse.urlparse(url)
 
 
-def getApiUrl(url=None):
+def getApiUrl(url=None, preferReferer=False):
     """
     In a request thread, call this to get the path to the root of the REST API.
     The returned path does *not* end in a forward slash.
 
     :param url: URL from which to extract the base URL. If not specified, uses
-        `cherrypy.url()`
+        the server root system setting. If that is not specified, uses `cherrypy.url()`
+    :param preferReferer: if no url is specified, this is true, and this is in
+        a cherrypy request that has a referer header that contains the api
+        string, use that referer as the url.
     """
+    apiStr = '/api/v1'
+
+    if not url:
+        if preferReferer and apiStr in cherrypy.request.headers.get('referer', ''):
+            url = cherrypy.request.headers['referer']
+        else:
+            root = ModelImporter.model('setting').get(SettingKey.SERVER_ROOT)
+            if root:
+                return posixpath.join(root, config.getConfig()['server']['api_root'].lstrip('/'))
+
     url = url or cherrypy.url()
-    idx = url.find('/api/v1')
+    idx = url.find(apiStr)
 
     if idx < 0:
         raise GirderException('Could not determine API root in %s.' % url)
 
-    return url[:idx + 7]
+    return url[:idx + len(apiStr)]
 
 
 def iterBody(length=READ_BUFFER_LEN, strictLength=False):
@@ -133,9 +147,9 @@ def _cacheAuthUser(fun):
 
         user = fun(returnToken, *args, **kwargs)
         if isinstance(user, tuple):
-            setattr(cherrypy.request, 'girderUser', user[0])
+            setCurrentUser(user[0])
         else:
-            setattr(cherrypy.request, 'girderUser', user)
+            setCurrentUser(user)
 
         return user
     return inner
@@ -227,6 +241,17 @@ def getCurrentUser(returnToken=False):
         return retVal(user, token)
 
 
+def setCurrentUser(user):
+    """
+    Explicitly set the user for the current request thread. This can be used
+    to enable specialized auth behavior on a per-request basis.
+
+    :param user: The user to set as the current user of this request.
+    :type user: dict or None
+    """
+    cherrypy.request.girderUser = user
+
+
 def requireAdmin(user, message=None):
     """
     Calling this on a user will ensure that they have admin rights.  If not,
@@ -238,7 +263,7 @@ def requireAdmin(user, message=None):
     :type message: str or None
     :raises AccessException: If the user is not an administrator.
     """
-    if user is None or user.get('admin', False) is not True:
+    if user is None or not user['admin']:
         raise AccessException(message or 'Administrator access required.')
 
 
@@ -266,12 +291,33 @@ def getBodyJson(allowConstants=False):
         raise RestException('Invalid JSON passed in request body.')
 
 
+def getParamJson(name, params, default=None):
+    """
+    For parameters that are expected to be specified as JSON, use
+    this to parse them, or raises a RestException if parsing fails.
+
+    :param name: The param name.
+    :type name: str
+    :param params: The dictionary of parameters.
+    :type params: dict
+    :param default: The default value if no such param was passed.
+    """
+    if name not in params:
+        return default
+
+    try:
+        return json.loads(params[name])
+    except ValueError:
+        raise RestException('The %s parameter must be valid JSON.' % name)
+
+
 class loadmodel(ModelImporter):  # noqa: class name
     """
     This is a decorator that can be used to load a model based on an ID param.
     For access controlled models, it will check authorization for the current
     user. The underlying function is called with a modified set of keyword
     arguments that is transformed by the "map" parameter of this decorator.
+    Any additional kwargs will be passed to the underlying model's `load`.
 
     :param map: Map of incoming parameter name to corresponding model arg name.
         If None is passed, this will map the parameter named "id" to a kwarg
@@ -288,9 +334,11 @@ class loadmodel(ModelImporter):  # noqa: class name
     :param exc: Whether an exception should be raised for a nonexistent
         resource.
     :type exc: bool
+    :param requiredFlags: Access flags that are required on the object being loaded.
+    :type requiredFlags: str or list/set/tuple of str or None
     """
     def __init__(self, map=None, model=None, plugin='_core', level=None,
-                 force=False, exc=True):
+                 force=False, exc=True, requiredFlags=None, **kwargs):
         if map is None:
             self.map = {'id': model}
         else:
@@ -301,6 +349,8 @@ class loadmodel(ModelImporter):  # noqa: class name
         self.modelName = model
         self.plugin = plugin
         self.exc = exc
+        self.kwargs = kwargs
+        self.requiredFlags = requiredFlags
 
     def _getIdValue(self, kwargs, idParam):
         if idParam in kwargs:
@@ -319,16 +369,22 @@ class loadmodel(ModelImporter):  # noqa: class name
                 id = self._getIdValue(kwargs, raw)
 
                 if self.force:
-                    kwargs[converted] = model.load(id, force=True)
+                    kwargs[converted] = model.load(
+                        id, force=True, **self.kwargs)
                 elif self.level is not None:
                     kwargs[converted] = model.load(
-                        id=id, level=self.level, user=getCurrentUser())
+                        id=id, level=self.level, user=getCurrentUser(),
+                        **self.kwargs)
                 else:
-                    kwargs[converted] = model.load(id)
+                    kwargs[converted] = model.load(id, **self.kwargs)
 
                 if kwargs[converted] is None and self.exc:
                     raise RestException(
                         'Invalid %s id (%s).' % (model.name, str(id)))
+
+                if self.requiredFlags:
+                    model.requireAccessFlags(
+                        kwargs[converted], user=getCurrentUser(), flags=self.requiredFlags)
 
             return fun(*args, **kwargs)
         return wrapped
@@ -349,7 +405,7 @@ class filtermodel(ModelImporter):  # noqa: class name
         :param addFields: Extra fields (key names) that should be included in
             the returned document(s), in addition to any in the model's normal
             whitelist. Only affects top level fields.
-        :type addFields: set, list, tuple, or None
+        :type addFields: `set, list, tuple, or None`
         """
         self.modelName = model
         self.plugin = plugin
@@ -421,6 +477,12 @@ def _createResponse(val):
     thread, this will simply return the response raw.
     """
     if getattr(cherrypy.request, 'girderRawResponse', False) is True:
+        if isinstance(val, six.text_type):
+            # If we were given a non-encoded text response, we have
+            # to encode it, so we use UTF-8.
+            ctype = cherrypy.response.headers['Content-Type'].split(';', 1)
+            setResponseHeader('Content-Type', ctype[0] + ';charset=utf-8')
+            return val.encode('utf8')
         return val
 
     accepts = cherrypy.request.headers.elements('Accept')
@@ -429,16 +491,17 @@ def _createResponse(val):
             break
         elif accept.value == 'text/html':  # pragma: no cover
             # Pretty-print and HTML-ify the response for the browser
-            cherrypy.response.headers['Content-Type'] = 'text/html'
-            resp = json.dumps(val, indent=4, sort_keys=True, allow_nan=False,
-                              separators=(',', ': '), cls=JsonEncoder)
+            setResponseHeader('Content-Type', 'text/html')
+            resp = cgi.escape(json.dumps(
+                val, indent=4, sort_keys=True, allow_nan=False, separators=(',', ': '),
+                cls=JsonEncoder))
             resp = resp.replace(' ', '&nbsp;').replace('\n', '<br />')
             resp = '<div style="font-family:monospace;">%s</div>' % resp
             return resp.encode('utf8')
 
     # Default behavior will just be normal JSON output. Keep this
     # outside of the loop body in case no Accept header is passed.
-    cherrypy.response.headers['Content-Type'] = 'application/json'
+    setResponseHeader('Content-Type', 'application/json')
     return json.dumps(val, sort_keys=True, allow_nan=False,
                       cls=JsonEncoder).encode('utf8')
 
@@ -460,7 +523,10 @@ def _handleAccessException(e):
     else:
         cherrypy.response.status = 403
         logger.exception('403 Error')
-    return {'message': e.message, 'type': 'access'}
+    val = {'message': e.message, 'type': 'access'}
+    if e.extra is not None:
+        val['extra'] = e.extra
+    return val
 
 
 def _handleGirderException(e):
@@ -550,14 +616,14 @@ def ensureTokenScopes(token, scope):
     :param token: The token object used in the request.
     :type token: dict
     :param scope: The required scope or set of scopes.
-    :type scope: str or list of str
+    :type scope: `str or list of str`
     """
     tokenModel = ModelImporter.model('token')
     if tokenModel.hasScope(token, TokenScope.USER_AUTH):
         return
 
     if not tokenModel.hasScope(token, scope):
-        setattr(cherrypy.request, 'girderUser', None)
+        setCurrentUser(None)
         if isinstance(scope, six.string_types):
             scope = (scope,)
         raise AccessException(
@@ -582,15 +648,15 @@ def _setCommonCORSHeaders():
     allowed = ModelImporter.model('setting').get(SettingKey.CORS_ALLOW_ORIGIN)
 
     if allowed:
-        cherrypy.response.headers['Access-Control-Allow-Credentials'] = 'true'
+        setResponseHeader('Access-Control-Allow-Credentials', 'true')
 
         allowed_list = [o.strip() for o in allowed.split(',')]
         key = 'Access-Control-Allow-Origin'
 
         if len(allowed_list) == 1:
-            cherrypy.response.headers[key] = allowed_list[0]
+            setResponseHeader(key, allowed_list[0])
         elif origin in allowed_list:
-            cherrypy.response.headers[key] = origin
+            setResponseHeader(key, origin)
 
 
 class RestException(Exception):
@@ -629,10 +695,10 @@ class Resource(ModelImporter):
         """
         if not hasattr(self, '_routes'):
             Resource.__init__(self)
-            print(TerminalColor.warning(
+            logprint.warning(
                 'WARNING: Resource subclass "%s" did not call '
                 '"Resource__init__()" from its constructor.' %
-                self.__class__.__name__))
+                self.__class__.__name__)
 
     def route(self, method, route, handler, nodoc=False, resource=None):
         """
@@ -677,26 +743,26 @@ class Resource(ModelImporter):
                     info=handler.description.asDict(), handler=handler)
         elif not nodoc:
             routePath = '/'.join([resource] + list(route))
-            print(TerminalColor.warning(
+            logprint.warning(
                 'WARNING: No description docs present for route %s %s' % (
-                    method, routePath)))
+                    method, routePath))
 
         # Warn if there is no access decorator on the handler function
         if not hasattr(handler, 'accessLevel'):
             routePath = '/'.join([resource] + list(route))
-            print(TerminalColor.warning(
+            logprint.warning(
                 'WARNING: No access level specified for route %s %s' % (
-                    method, routePath)))
+                    method, routePath))
 
         if method.lower() not in ('head', 'get') \
             and hasattr(handler, 'cookieAuth') \
             and not (isinstance(handler.cookieAuth, tuple) and
                      handler.cookieAuth[1]):
             routePath = '/'.join([resource] + list(route))
-            print(TerminalColor.warning(
-                  'WARNING: Cannot allow cookie authentication for '
-                  'route %s %s without specifying "force=True"' % (
-                      method, routePath)))
+            logprint.warning(
+                'WARNING: Cannot allow cookie authentication for '
+                'route %s %s without specifying "force=True"' % (
+                    method, routePath))
 
     def removeRoute(self, method, route, handler=None, resource=None):
         """
@@ -772,7 +838,7 @@ class Resource(ModelImporter):
         :param method: The HTTP method of the current request.
         :type method: str
         :param path: The path params of the request.
-        :type path: list
+        :type path: `list`
         """
         if not self._routes:
             raise Exception('No routes defined for resource')
@@ -846,9 +912,9 @@ class Resource(ModelImporter):
         wildcard tokens of the route.
 
         :param path: The requested path.
-        :type path: list
+        :type path: `list`
         :param route: The route specification to match against.
-        :type route: list
+        :type route: `list`
         """
         wildcards = {}
         for i in range(0, len(route)):
@@ -858,46 +924,54 @@ class Resource(ModelImporter):
                 return False
         return wildcards
 
-    def requireParams(self, required, provided):
+    def requireParams(self, required, provided=None):
         """
-        Throws an exception if any of the parameters in the required iterable
-        is not found in the provided parameter set.
+        This method has two modes. In the first mode, this takes two
+        parameters, the first being a required parameter or list of
+        them, and the second the dictionary of parameters that were
+        passed. If the required parameter does not appear in the
+        passed parameters, a ValidationException is raised.
+
+        The second mode of operation takes only a single
+        parameter, which is a dict mapping required parameter names
+        to passed in values for those params. If the value is ``None``,
+        a ValidationException is raised. This mode works well in conjunction
+        with the ``autoDescribeRoute`` decorator, where the parameters are
+        not all contained in a single dictionary.
 
         :param required: An iterable of required params, or if just one is
             required, you can simply pass it as a string.
-        :type required: list, tuple, or str
+        :type required: `list, tuple, or str`
         :param provided: The list of provided parameters.
         :type provided: dict
         """
-        if isinstance(required, six.string_types):
-            required = (required,)
+        if provided is None and isinstance(required, dict):
+            for name, val in six.viewitems(required):
+                if val is None:
+                    raise RestException('Parameter "%s" is required.' % name)
+        else:
+            if isinstance(required, six.string_types):
+                required = (required,)
 
-        for param in required:
-            if param not in provided:
-                raise RestException("Parameter '%s' is required." % param)
+            for param in required:
+                if provided is None or param not in provided:
+                    raise RestException('Parameter "%s" is required.' % param)
 
     def boolParam(self, key, params, default=None):
         """
-        Coerce a parameter value from a str to a bool. This function is case
-        insensitive. The following string values will be interpreted as True:
+        Coerce a parameter value from a str to a bool.
 
-          - ``'true'``
-          - ``'on'``
-          - ``'1'``
-          - ``'yes'``
-
-        All other strings will be interpreted as False. If the given param
-        is not passed at all, returns the value specified by the default arg.
+        :param key: The parameter key to test.
+        :type key: str
+        :param params: The request parameters.
+        :type params: dict
+        :param default: The default value if no key is passed.
+        :type default: bool or None
         """
         if key not in params:
             return default
 
-        val = params[key]
-
-        if isinstance(val, bool):
-            return val
-
-        return val.lower().strip() in ('true', 'on', '1', 'yes')
+        return toBool(params[key])
 
     def requireAdmin(self, user, message=None):
         """
@@ -918,8 +992,7 @@ class Resource(ModelImporter):
         """
         return setRawResponse(*args, **kwargs)
 
-    def getPagingParameters(self, params, defaultSortField=None,
-                            defaultSortDir=SortDir.ASCENDING):
+    def getPagingParameters(self, params, defaultSortField=None, defaultSortDir=SortDir.ASCENDING):
         """
         Pass the URL parameters into this function if the request is for a
         list of resources that should be paginated. It will return a tuple of
@@ -956,7 +1029,7 @@ class Resource(ModelImporter):
         designated scope or set of scopes. Raises an AccessException if not.
 
         :param scope: A scope or set of scopes that is required.
-        :type scope: str or list of str
+        :type scope: `str or list of str`
         """
         ensureTokenScopes(getCurrentToken(), scope)
 
@@ -965,6 +1038,12 @@ class Resource(ModelImporter):
         Bound wrapper for :func:`girder.api.rest.getBodyJson`.
         """
         return getBodyJson()
+
+    def getParamJson(self, name, params, default=None):
+        """
+        Bound wrapper for :func:`girder.api.rest.getParamJson`.
+        """
+        return getParamJson(name, params, default)
 
     def getCurrentToken(self):
         """
@@ -991,13 +1070,18 @@ class Resource(ModelImporter):
         """
         Helper method to send the authentication cookie
         """
-        days = float(self.model('setting').get(SettingKey.COOKIE_LIFETIME))
+        setting = self.model('setting')
+        days = float(setting.get(SettingKey.COOKIE_LIFETIME))
+        secure = setting.get(SettingKey.SECURE_COOKIE)
         token = self.model('token').createToken(user, days=days, scope=scope)
 
         cookie = cherrypy.response.cookie
         cookie['girderToken'] = str(token['_id'])
         cookie['girderToken']['path'] = '/'
         cookie['girderToken']['expires'] = int(days * 3600 * 24)
+
+        if secure:
+            cookie['girderToken']['secure'] = True
 
         return token
 
@@ -1019,8 +1103,8 @@ class Resource(ModelImporter):
         allowMethods = self.model('setting').get(SettingKey.CORS_ALLOW_METHODS)\
             or 'GET, POST, PUT, HEAD, DELETE'
 
-        cherrypy.response.headers['Access-Control-Allow-Methods'] = allowMethods
-        cherrypy.response.headers['Access-Control-Allow-Headers'] = allowHeaders
+        setResponseHeader('Access-Control-Allow-Methods', allowMethods)
+        setResponseHeader('Access-Control-Allow-Headers', allowHeaders)
 
     @endpoint
     def DELETE(self, path, params):

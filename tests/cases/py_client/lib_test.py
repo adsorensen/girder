@@ -17,6 +17,7 @@
 #  limitations under the License.
 ###############################################################################
 
+import girder
 import girder_client
 import json
 import mock
@@ -53,17 +54,14 @@ class PythonClientTestCase(base.TestCase):
 
         def writeFile(dirName):
             filename = os.path.join(dirName, 'f')
-            f = open(filename, 'w')
-            f.write(filename)
-            f.close()
+            with open(filename, 'w') as f:
+                f.write(filename)
             filename = os.path.join(dirName, 'f1')
-            f = open(filename, 'w')
-            f.write(filename)
-            f.close()
+            with open(filename, 'w') as f:
+                f.write(filename)
 
         # make some temp dirs and files
-        self.libTestDir = os.path.join(os.path.dirname(__file__),
-                                       '_libTestDir')
+        self.libTestDir = os.path.join(os.path.dirname(__file__), '_libTestDir')
         # unlink old temp dirs and files first
         shutil.rmtree(self.libTestDir, ignore_errors=True)
 
@@ -93,6 +91,19 @@ class PythonClientTestCase(base.TestCase):
 
         base.TestCase.tearDown(self)
 
+    def testSession(self):
+        @httmock.urlmatch(path=r'.*/describe$')
+        def mock(url, request):
+            self.assertIn('some-header', request.headers)
+            self.assertEqual(request.headers['some-header'], 'some-value')
+
+        with httmock.HTTMock(mock):
+            with self.client.session() as session:
+                session.headers.update({'some-header': 'some-value'})
+
+                self.client.get('describe')
+                self.client.get('describe')
+
     def getPublicFolder(self, user):
             folders = list(self.client.listFolder(
                 parentId=user['_id'], parentFolderType='user', name='Public'))
@@ -115,8 +126,7 @@ class PythonClientTestCase(base.TestCase):
         # Test authentication failure
         flag = False
         try:
-            self.client.authenticate(username=self.user['login'],
-                                     password='wrong')
+            self.client.authenticate(username=self.user['login'], password='wrong')
         except girder_client.AuthenticationError:
             flag = True
 
@@ -161,15 +171,13 @@ class PythonClientTestCase(base.TestCase):
         self.assertNotEqual(privateFolder, None)
         self.assertNotEqual(publicFolder, None)
 
-        self.assertEqual(self.client.getFolder(privateFolder['_id']),
-                         privateFolder)
+        self.assertEqual(self.client.getFolder(privateFolder['_id']), privateFolder)
 
         acl = self.client.getFolderAccess(privateFolder['_id'])
         self.assertIn('users', acl)
         self.assertIn('groups', acl)
 
-        self.client.setFolderAccess(privateFolder['_id'], json.dumps(acl),
-                                    public=False)
+        self.client.setFolderAccess(privateFolder['_id'], json.dumps(acl), public=False)
         self.assertEqual(acl, self.client.getFolderAccess(privateFolder['_id']))
 
         # Test recursive ACL propagation (not very robust test yet)
@@ -214,11 +222,11 @@ class PythonClientTestCase(base.TestCase):
             password='password', email='Callback@email.com')
         callbackPublicFolder = six.next(self.model('folder').childFolders(
             parentType='user', parent=callbackUser, user=None, limit=1))
-        callback_counts = {'folder': 0, 'item': 0}
+        callbackCounts = {'folder': 0, 'item': 0}
         folders = {}
         items = {}
         folders[self.libTestDir] = False
-        folder_count = 1     # 1 for self.libTestDir
+        folderCount = 1     # 1 for self.libTestDir
         item_count = 0
         for root, dirs, files in os.walk(self.libTestDir):
             for name in files:
@@ -226,35 +234,35 @@ class PythonClientTestCase(base.TestCase):
                 item_count += 1
             for name in dirs:
                 folders[os.path.join(root, name)] = False
-                folder_count += 1
+                folderCount += 1
 
-        def folder_callback(folder, filepath):
+        def folderCallback(folder, filepath):
             self.assertIn(filepath, six.viewkeys(folders))
             folders[filepath] = True
-            callback_counts['folder'] += 1
+            callbackCounts['folder'] += 1
 
-        def item_callback(item, filepath):
+        def itemCallback(item, filepath):
             self.assertIn(filepath, six.viewkeys(items))
             items[filepath] = True
-            callback_counts['item'] += 1
+            callbackCounts['item'] += 1
 
-        self.client.add_folder_upload_callback(folder_callback)
-        self.client.add_item_upload_callback(item_callback)
+        self.client.addFolderUploadCallback(folderCallback)
+        self.client.addItemUploadCallback(itemCallback)
         self.client.upload(self.libTestDir, callbackPublicFolder['_id'])
 
         # make sure counts are the same (callbacks not called more than once)
         # and that all folders and files have callbacks called on them
-        self.assertEqual(folder_count, callback_counts['folder'])
-        self.assertEqual(item_count, callback_counts['item'])
+        self.assertEqual(folderCount, callbackCounts['folder'])
+        self.assertEqual(item_count, callbackCounts['item'])
         self.assertTrue(all(six.viewvalues(items)))
         self.assertTrue(all(six.viewvalues(folders)))
 
-        # Upload again with reuse_existing on
+        # Upload again with reuseExisting on
         existingList = list(self.model('folder').childFolders(
             parentType='folder', parent=callbackPublicFolder,
             user=callbackUser, limit=0))
         self.client.upload(self.libTestDir, callbackPublicFolder['_id'],
-                           reuse_existing=True)
+                           reuseExisting=True)
         newList = list(self.model('folder').childFolders(
             parentType='folder', parent=callbackPublicFolder,
             user=callbackUser, limit=0))
@@ -321,7 +329,54 @@ class PythonClientTestCase(base.TestCase):
                 size=size, parentType='folder')
             self.assertEqual(file['mimeType'], 'text/plain')
 
-    def testUploadReference(self):
+    def testUploadNonMultipartVersionGreaterOrEqual22(self):
+        for version in ['2.2.0', '2.2.1', '2.3', '3.0', '3.1']:
+            with mock.patch.object(
+                    self.client, 'getServerVersion', return_value=version.split('.')):
+                self._testUploadMethod(expected_non_multipart_hits=1, expected_multipart_hits=0)
+
+    def testUploadMultipartVersionLess22(self):
+        for version in ['1.4.1', '1.6.0', '2.1.0', '2.1.9']:
+            with mock.patch.object(
+                    self.client, 'getServerVersion', return_value=version.split('.')):
+                self._testUploadMethod(expected_non_multipart_hits=0, expected_multipart_hits=1)
+
+    def _testUploadMethod(self, expected_non_multipart_hits=0, expected_multipart_hits=0):
+
+        # track API calls
+        non_multipart = []
+        multipart = []
+
+        path = os.path.join(self.libTestDir, 'sub0', 'f')
+        size = os.path.getsize(path)
+
+        original_post = self.client.post
+
+        def mock_post(*args, **kwargs):
+            if 'data' in kwargs:
+                if 'parameters' in kwargs:
+                    multipart.append(1)
+                else:
+                    non_multipart.append(1)
+            return original_post(*args, **kwargs)
+
+        with mock.patch.object(self.client, 'post', new=mock_post):
+            with open(path) as fh:
+                self.client.uploadFile(
+                    self.publicFolder['_id'], fh, name='test1', size=size, parentType='folder')
+
+        self.assertEqual(len(non_multipart), expected_non_multipart_hits)
+        self.assertEqual(len(multipart), expected_multipart_hits)
+
+    def testUploadReferenceWithMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '1', '0']):
+            self._testUploadReference()
+
+    def testUploadReferenceWithNonMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '2', '0']):
+            self._testUploadReference()
+
+    def _testUploadReference(self):
         eventList = []
 
         def processEvent(event):
@@ -331,9 +386,11 @@ class PythonClientTestCase(base.TestCase):
 
         path = os.path.join(self.libTestDir, 'sub0', 'f')
         size = os.path.getsize(path)
-        self.client.uploadFile(self.publicFolder['_id'], open(path),
-                               name='test1', size=size, parentType='folder',
-                               reference='test1_reference')
+        with open(path) as fh:
+            self.client.uploadFile(
+                self.publicFolder['_id'], fh, name='test1', size=size, parentType='folder',
+                reference='test1_reference')
+
         starttime = time.time()
         while (not events.daemon.eventQueue.empty() and
                 time.time() - starttime < 5):
@@ -351,7 +408,9 @@ class PythonClientTestCase(base.TestCase):
         self.assertNotEqual(eventList[0]['file']['_id'],
                             eventList[1]['file']['_id'])
 
-        open(path, 'ab').write(b'test')
+        with open(path, 'ab') as fh:
+            fh.write(b'test')
+
         size = os.path.getsize(path)
         self.client.uploadFileToItem(str(eventList[0]['file']['itemId']), path,
                                      reference='test3_reference')
@@ -373,17 +432,27 @@ class PythonClientTestCase(base.TestCase):
 
         # Test guessing of MIME type
         testPath = os.path.join(self.libTestDir, 'out.txt')
-        open(testPath, 'w').write('test')
+        with open(testPath, 'w') as fh:
+            fh.write('test')
+
         file = self.client.uploadFileToItem(item['_id'], testPath)
         self.assertEqual(file['mimeType'], 'text/plain')
 
-    def testUploadContent(self):
+    def testUploadContentWithMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '1', '0']):
+            self._testUploadContent()
+
+    def testUploadContentWithoutMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '2', '0']):
+            self._testUploadContent()
+
+    def _testUploadContent(self):
         path = os.path.join(self.libTestDir, 'sub0', 'f')
         size = os.path.getsize(path)
-        file = self.client.uploadFile(self.publicFolder['_id'], open(path),
-                                      name='test1',
-                                      size=size, parentType='folder',
-                                      reference='test1_reference')
+        with open(path) as fh:
+            file = self.client.uploadFile(
+                self.publicFolder['_id'], fh, name='test1', size=size, parentType='folder',
+                reference='test1_reference')
 
         contents = 'you\'ve changed!'
         size = len(contents)
@@ -501,8 +570,7 @@ class PythonClientTestCase(base.TestCase):
             'nothing': 'to see here!'
         }
         self.client.addMetadataToFolder(self.publicFolder['_id'], meta)
-        updatedFolder = self.model('folder').load(self.publicFolder['_id'],
-                                                  force=True)
+        updatedFolder = self.model('folder').load(self.publicFolder['_id'], force=True)
         self.assertEqual(updatedFolder['meta'], meta)
 
     def testPatch(self):
@@ -517,7 +585,10 @@ class PythonClientTestCase(base.TestCase):
         }
 
         def _patchJson(url, request):
-            patchRequest['valid'] = json.loads(request.body) == jsonBody
+            body = request.body
+            if isinstance(body, six.binary_type):
+                body = body.decode('utf8')
+            patchRequest['valid'] = json.loads(body) == jsonBody
 
             return httmock.response(200, {}, {}, request=request)
 
@@ -556,9 +627,9 @@ class PythonClientTestCase(base.TestCase):
         item = self.client.createItem(self.publicFolder['_id'],
                                       itemName)
 
-        testPath = "user/%s/%s/%s" % (self.user['login'],
+        testPath = 'user/%s/%s/%s' % (self.user['login'],
                                       self.publicFolder['name'], itemName)
-        testInvalidPath = "user/%s/%s/%s" % (self.user['login'],
+        testInvalidPath = 'user/%s/%s/%s' % (self.user['login'],
                                              self.publicFolder['name'],
                                              'RogueOne')
 
@@ -573,7 +644,7 @@ class PythonClientTestCase(base.TestCase):
         self.assertEqual(cm.exception.status, 400)
         self.assertEqual(cm.exception.method, 'GET')
         resp = json.loads(cm.exception.responseText)
-        self.assertEqual(resp['type'], 'rest')
+        self.assertEqual(resp['type'], 'validation')
         self.assertEqual(resp['message'],
                          'Path not found: %s' % (testInvalidPath))
 
@@ -599,11 +670,18 @@ class PythonClientTestCase(base.TestCase):
         self.assertEqual(cm.exception.status, 400)
         self.assertEqual(cm.exception.method, 'GET')
         resp = json.loads(cm.exception.responseText)
-        self.assertEqual(resp['type'], 'rest')
-        self.assertEqual(resp['message'],
-                         'Path not found: %s' % (testInvalidPath))
+        self.assertEqual(resp['type'], 'validation')
+        self.assertEqual(resp['message'], 'Path not found: %s' % (testInvalidPath))
 
-    def testUploadWithPath(self):
+    def testUploadWithPathWithMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '1', '0']):
+            self._testUploadWithPath()
+
+    def testUploadWithPathWithoutMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '2', '0']):
+            self._testUploadWithPath()
+
+    def _testUploadWithPath(self):
         testUser = self.model('user').createUser(
             firstName='Jeffrey', lastName='Abrams', login='jjabrams',
             password='password', email='jjabrams@email.com')
@@ -617,3 +695,75 @@ class PythonClientTestCase(base.TestCase):
         self.assertEqual([f['name'] for f in self.model('folder').childFolders(
             parentType='folder', parent=parent,
             user=testUser, limit=0)], ['sub0', 'sub1', 'sub2'])
+
+    def testUploadFileWithDifferentNameWithMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '1', '0']):
+            self._testUploadFileWithDifferentName()
+
+    def testUploadFileWithDifferentNameWithoutMultipart(self):
+        with mock.patch.object(self.client, 'getServerVersion', return_value=['2', '2', '0']):
+            self._testUploadFileWithDifferentName()
+
+    def _testUploadFileWithDifferentName(self):
+        itemName = 'MyStash'
+        item = self.client.createItem(self.publicFolder['_id'],
+                                      itemName)
+
+        path = os.path.join(self.libTestDir, 'sub1', 'f1')
+        uploadedFile = self.client.uploadFileToItem(item['_id'], path, filename='g1')
+
+        self.assertEqual(uploadedFile['name'], 'g1')
+
+    def testGetServerVersion(self):
+
+        # track describe API calls
+        hits = []
+
+        @httmock.urlmatch(path=r'.*/describe$')
+        def mock(url, request):
+            hits.append(url)
+
+        expected_version = girder.constants.VERSION['apiVersion']
+
+        with httmock.HTTMock(mock):
+            self.assertEqual(
+                '.'.join(self.client.getServerVersion()), expected_version)
+            self.assertEqual(len(hits), 1)
+
+            self.assertEqual(
+                '.'.join(self.client.getServerVersion()), expected_version)
+            self.assertEqual(len(hits), 1)
+
+            self.assertEqual(
+                '.'.join(self.client.getServerVersion(useCached=False)), expected_version)
+            self.assertEqual(len(hits), 2)
+
+    def testGetServerAPIDescription(self):
+
+        # track system/version APIi calls
+        hits = []
+
+        @httmock.urlmatch(path=r'.*/describe$')
+        def mock(url, request):
+            hits.append(url)
+
+        def checkDescription(description):
+            self.assertEqual(description['basePath'], '/api/v1')
+            self.assertEqual(description['definitions'], {})
+            self.assertEqual(description['info']['title'], 'Girder REST API')
+            self.assertEqual(description['info']['version'], girder.constants.VERSION['apiVersion'])
+            self.assertGreater(len(description['paths']), 0)
+
+        with httmock.HTTMock(mock):
+            checkDescription(self.client.getServerAPIDescription())
+            self.assertEqual(len(hits), 1)
+
+            checkDescription(self.client.getServerAPIDescription())
+            self.assertEqual(len(hits), 1)
+
+            checkDescription(self.client.getServerAPIDescription(useCached=False))
+            self.assertEqual(len(hits), 2)
+
+    def testNonJsonResponse(self):
+        resp = self.client.get('user', jsonResp=False)
+        self.assertIsInstance(resp.content, six.binary_type)

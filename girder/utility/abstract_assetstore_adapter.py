@@ -14,14 +14,103 @@
 #  limitations under the License.
 ###############################################################################
 
-import cherrypy
+import itertools
 import os
+import re
 import six
 
-from girder.utility import progress
-from ..constants import SettingKey
+from girder.api.rest import setResponseHeader
+from girder.constants import SettingKey
+from girder.models.model_base import ValidationException
+from girder.utility import progress, RequestBodyStream
 from .model_importer import ModelImporter
-from ..models.model_base import ValidationException
+
+
+class FileHandle(object):
+    """
+    This is the base class that is returned for the file-like API into
+    Girder file objects. The ``open`` method of assetstore implementations
+    is responsible for returning an instance of this class or one of its
+    subclasses. This base class implementation is returned by the
+    abstract assetstore adapter, and does not leverage any details of the
+    assetstore implementations.
+
+    These file handles are stateful, and therefore not safe for concurrent
+    access. If used by multiple threads, mutexes should be used.
+
+    :param file: The file object to which this file-like object corresponds.
+    :type file: dict
+    :param adapter: The assetstore adapter corresponding to this file.
+    :type adapter: girder.utility.abstract_assetstore_adapter.AbstractAssetstoreAdapter
+    """
+    def __init__(self, file, adapter):
+        self._file = file
+        self._adapter = adapter
+        self._pos = None
+
+        self.seek(0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def read(self, size):
+        """
+        Read *size* bytes from the file data.
+
+        :param size: The number of bytes to read from the current position. The
+            actual number returned could be less than this if the end of the
+            file is reached. An empty response indicates that the file has been
+            completely consumed.
+        :type size: int
+        :rtype: bytes
+        """
+        data = six.BytesIO()
+        length = 0
+        for chunk in itertools.chain(self._prev, self._stream):
+            chunkLen = len(chunk)
+
+            if chunkLen == 0:
+                break
+
+            if length + chunkLen <= size:
+                data.write(chunk)
+                self._prev = []
+                length += chunkLen
+
+                if length == size:
+                    break
+            else:
+                chunkLen = min(size - length, chunkLen)
+                data.write(chunk[:chunkLen])
+                self._prev = [chunk[chunkLen:]]
+                length += chunkLen
+                break
+
+        self._pos += length
+        return data.getvalue()
+
+    def tell(self):
+        return self._pos
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        oldPos = self._pos
+
+        if whence == os.SEEK_SET:
+            self._pos = offset
+        elif whence == os.SEEK_CUR:
+            self._pos += offset
+        elif whence == os.SEEK_END:
+            self._pos = max(self._file['size'] - offset, 0)
+
+        if self._pos != oldPos:
+            self._prev = []
+            self._stream = self._adapter.downloadFile(self._file, offset=self._pos, headers=False)()
+
+    def close(self):
+        pass
 
 
 class AbstractAssetstoreAdapter(ModelImporter):
@@ -125,13 +214,38 @@ class AbstractAssetstoreAdapter(ModelImporter):
         raise NotImplementedError('Must override deleteFile in %s.' %
                                   self.__class__.__name__)  # pragma: no cover
 
+    def shouldImportFile(self, path, params):
+        """
+        This is a helper used during the import process to determine if a file located at
+        the specified path should be imported, based on the request parameters. Exclusion
+        takes precedence over inclusion.
+
+        :param path: The path of the file.
+        :type path: str
+        :param params: The request parameters.
+        :type params: dict
+        :rtype: bool
+        """
+        include = params.get('fileIncludeRegex')
+        exclude = params.get('fileExcludeRegex')
+
+        fname = os.path.basename(path)
+
+        if exclude and re.match(exclude, fname):
+            return False
+
+        if include:
+            return re.match(include, fname)
+
+        return True
+
     def downloadFile(self, file, offset=0, headers=True, endByte=None,
                      contentDisposition=None, extraParameters=None, **kwargs):
         """
         This method is in charge of returning a value to the RESTful endpoint
         that can be used to download the file. This can return a generator
-        function that streams the file directly, or can modify the cherrypy
-        request headers and perform a redirect and return None, for example.
+        function that streams the file directly, or can modify the response
+        headers and perform a redirect and return None, for example.
 
         :param file: The file document being downloaded.
         :type file: dict
@@ -192,7 +306,7 @@ class AbstractAssetstoreAdapter(ModelImporter):
         :type chunk: a file-like object or a string
         :returns: the length of the chunk if known, or None.
         """
-        if isinstance(chunk, six.BytesIO):
+        if isinstance(chunk, (six.BytesIO, RequestBodyStream)):
             return
         elif hasattr(chunk, "fileno"):
             return os.fstat(chunk.fileno()).st_size
@@ -216,19 +330,23 @@ class AbstractAssetstoreAdapter(ModelImporter):
             be set to 'attachment; filename=$filename'.
         :type contentDisposition: str or None
         """
-        cherrypy.response.headers['Content-Type'] = \
-            file.get('mimeType') or 'application/octet-stream'
+        setResponseHeader(
+            'Content-Type',
+            file.get('mimeType') or 'application/octet-stream')
         if contentDisposition == 'inline':
-            cherrypy.response.headers['Content-Disposition'] = \
-                'inline; filename="%s"' % file['name']
+            setResponseHeader(
+                'Content-Disposition',
+                'inline; filename="%s"' % file['name'])
         else:
-            cherrypy.response.headers['Content-Disposition'] = \
-                'attachment; filename="%s"' % file['name']
-        cherrypy.response.headers['Content-Length'] = max(endByte - offset, 0)
+            setResponseHeader(
+                'Content-Disposition',
+                'attachment; filename="%s"' % file['name'])
+        setResponseHeader('Content-Length', max(endByte - offset, 0))
 
         if (offset or endByte < file['size']) and file['size']:
-            cherrypy.response.headers['Content-Range'] = 'bytes %d-%d/%d' % (
-                offset, endByte - 1, file['size'])
+            setResponseHeader(
+                'Content-Range',
+                'bytes %d-%d/%d' % (offset, endByte - 1, file['size']))
 
     def checkUploadSize(self, upload, chunkSize):
         """
@@ -307,3 +425,16 @@ class AbstractAssetstoreAdapter(ModelImporter):
         :type file: dict
         """
         pass
+
+    def open(self, file):
+        """
+        Exposes a Girder file as a python file-like object. At the
+        moment, this is a read-only interface, the equivalent of opening a
+        system file with 'rb' mode.
+
+        :param file: A Girder file document.
+        :type file: dict
+        :return: A file-like object containing the bytes of the file.
+        :rtype: FileHandle
+        """
+        return FileHandle(file, self)

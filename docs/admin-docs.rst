@@ -8,3 +8,5 @@ Administrator Documentation
    installation
    deploy
    configuration
+   provisioning
+   sftp

@@ -21,7 +21,9 @@ import time
 
 from tests import base
 from girder import events
+from girder.constants import AccessType
 from girder.models.model_base import ValidationException
+import json
 
 
 JobStatus = None
@@ -54,7 +56,7 @@ class JobsTestCase(base.TestCase):
             self.job = event.info
             if self.job['handler'] == 'my_handler':
                 self.job['status'] = JobStatus.RUNNING
-                self.model('job', 'jobs').save(self.job)
+                self.job = self.model('job', 'jobs').save(self.job)
                 self.assertEqual(self.job['args'], ('hello', 'world'))
                 self.assertEqual(self.job['kwargs'], {'a': 'b'})
 
@@ -99,24 +101,49 @@ class JobsTestCase(base.TestCase):
             'token': token['_id']
         })
         self.assertStatusOk(resp)
-        self.assertEqual(resp.json['log'], 'My log message\nappend message')
+        # We shouldn't get the log back in this case
+        self.assertNotIn('log', resp.json)
+
+        # Do a fetch on the job itself to get the log
+        resp = self.request(path, user=self.users[1])
+        self.assertStatusOk(resp)
+        self.assertEqual(
+            resp.json['log'], ['My log message\n', 'append message'])
 
         # Test overwriting the log and updating status
         resp = self.request(path, method='PUT', params={
-            'log': 'overwrite',
+            'log': 'overwritten log',
             'overwrite': 'true',
             'status': JobStatus.SUCCESS,
             'token': token['_id']
         })
         self.assertStatusOk(resp)
-        self.assertEqual(resp.json['log'], 'overwrite')
+        self.assertNotIn('log', resp.json)
         self.assertEqual(resp.json['status'], JobStatus.SUCCESS)
+
+        job = self.model('job', 'jobs').load(
+            job['_id'], force=True, includeLog=True)
+        self.assertEqual(job['log'], ['overwritten log'])
 
         # We should be able to delete the job as the user who created it
         resp = self.request(path, user=self.users[1], method='DELETE')
         self.assertStatusOk(resp)
         job = self.model('job', 'jobs').load(job['_id'], force=True)
         self.assertIsNone(job)
+
+    def testLegacyLogBehavior(self):
+        # Force save a job with a string log to simulate a legacy job record
+        job = self.model('job', 'jobs').createJob(
+            title='legacy', type='legacy', user=self.users[1], save=False)
+        job['log'] = 'legacy log'
+        job = self.model('job', 'jobs').save(job, validate=False)
+
+        self.assertEqual(job['log'], 'legacy log')
+
+        # Load the record, we should now get the log as a list
+        job = self.model('job', 'jobs').load(job['_id'], force=True,
+                                             includeLog=True)
+        self.assertEqual(job['log'], ['legacy log'])
 
     def testListJobs(self):
         job = self.model('job', 'jobs').createJob(
@@ -164,12 +191,65 @@ class JobsTestCase(base.TestCase):
         self.assertEqual(len(resp.json), 1)
         self.assertEqual(resp.json[0]['_id'], str(publicJob['_id']))
 
+    def testListAllJobs(self):
+        self.model('job', 'jobs').createJob(
+            title='user 0 job', type='t', user=self.users[0], public=False)
+
+        self.model('job', 'jobs').createJob(
+            title='user 1 job', type='t', user=self.users[1], public=False)
+
+        self.model('job', 'jobs').createJob(
+            title='user 1 job', type='t', user=self.users[1], public=True)
+
+        self.model('job', 'jobs').createJob(
+            title='user 2 job', type='t', user=self.users[2])
+
+        self.model('job', 'jobs').createJob(
+            title='anonymous job', type='t')
+
+        self.model('job', 'jobs').createJob(
+            title='anonymous public job', type='t2', public=True)
+
+        # User 0, as a site admin, should be able to see all jobs
+        resp = self.request('/job/all', user=self.users[0])
+        self.assertStatusOk(resp)
+        self.assertEqual(len(resp.json), 6)
+
+        # Test deprecated listAll method
+        jobs = list(self.model('job', 'jobs').listAll(limit=0, offset=0,
+                                                      sort=None, currentUser=self.users[0]))
+        self.assertEqual(len(jobs), 6)
+
+        # get with filter
+        resp = self.request('/job/all', user=self.users[0], params={
+            'types': json.dumps(['t']),
+            'statuses': json.dumps([0])
+        })
+        self.assertStatusOk(resp)
+        self.assertEqual(len(resp.json), 5)
+
+        # get with unmet filter conditions
+        resp = self.request('/job/all', user=self.users[0], params={
+            'types': json.dumps(['nonexisttype'])
+        })
+        self.assertStatusOk(resp)
+        self.assertEqual(len(resp.json), 0)
+
+        # User 1, as non site admin, should encounter http 403 (Forbidden)
+        resp = self.request('/job/all', user=self.users[1])
+        self.assertStatus(resp, 403)
+
+        # Not authenticated user should encounter http 401 (unauthorized)
+        resp = self.request('/job/all')
+        self.assertStatus(resp, 401)
+
     def testFiltering(self):
         job = self.model('job', 'jobs').createJob(
             title='A job', type='t', user=self.users[1], public=True)
 
         job['_some_other_field'] = 'foo'
-        job = self.model('job', 'jobs').save(job)
+        jobModel = self.model('job', 'jobs')
+        job = jobModel.save(job)
 
         resp = self.request('/job/%s' % job['_id'])
         self.assertStatusOk(resp)
@@ -182,18 +262,12 @@ class JobsTestCase(base.TestCase):
         self.assertTrue('kwargs' in resp.json)
         self.assertTrue('args' in resp.json)
 
-        def filterJob(event):
-            event.info['job']['_some_other_field'] = 'bar'
-            event.addResponse({
-                'exposeFields': ['_some_other_field'],
-                'removeFields': ['created']
-            })
-
-        events.bind('jobs.filter', 'test', filterJob)
+        jobModel.exposeFields(level=AccessType.READ, fields={'_some_other_field'})
+        jobModel.hideFields(level=AccessType.READ, fields={'created'})
 
         resp = self.request('/job/%s' % job['_id'])
         self.assertStatusOk(resp)
-        self.assertEqual(resp.json['_some_other_field'], 'bar')
+        self.assertEqual(resp.json['_some_other_field'], 'foo')
         self.assertTrue('created' not in resp.json)
 
     def testJobProgressAndNotifications(self):
@@ -235,12 +309,12 @@ class JobsTestCase(base.TestCase):
         self.assertEqual(
             resp.json['timestamps'][0]['status'], JobStatus.RUNNING)
 
-        # We passed notify=false, so we should not have any notifications
+        # We passed notify=false, so we should only have the job creation notification
         resp = self.request(path='/notification/stream', method='GET',
                             user=self.users[1], isJson=False,
                             params={'timeout': 0})
         messages = self.getSseMessages(resp)
-        self.assertEqual(len(messages), 0)
+        self.assertEqual(len(messages), 1)
 
         # Update progress with notify=true (the default)
         resp = self.request(path, method='PUT', user=self.users[1], params={
@@ -251,20 +325,24 @@ class JobsTestCase(base.TestCase):
         self.assertStatusOk(resp)
         self.assertNotEqual(resp.json['progress']['notificationId'], None)
 
-        # We should now see two notifications (job status + progress)
+        # We should now see three notifications (job created + job status + progress)
         resp = self.request(path='/notification/stream', method='GET',
                             user=self.users[1], isJson=False,
                             params={'timeout': 0})
         messages = self.getSseMessages(resp)
         job = self.model('job', 'jobs').load(job['_id'], force=True)
-        self.assertEqual(len(messages), 2)
-        statusNotify = messages[0]
-        progressNotify = messages[1]
+        self.assertEqual(len(messages), 3)
+        creationNotify = messages[0]
+        statusNotify = messages[1]
+        progressNotify = messages[2]
 
+        self.assertEqual(creationNotify['type'], 'job_created')
+        self.assertEqual(creationNotify['data']['_id'], str(job['_id']))
         self.assertEqual(statusNotify['type'], 'job_status')
         self.assertEqual(statusNotify['data']['_id'], str(job['_id']))
         self.assertEqual(int(statusNotify['data']['status']), JobStatus.ERROR)
-        self.assertTrue('kwargs' not in statusNotify['data'])
+        self.assertNotIn('kwargs', statusNotify['data'])
+        self.assertNotIn('log', statusNotify['data'])
 
         self.assertEqual(progressNotify['type'], 'progress')
         self.assertEqual(progressNotify['data']['title'], job['title'])
@@ -308,8 +386,9 @@ class JobsTestCase(base.TestCase):
 
         self.model('job', 'jobs').scheduleJob(job)
 
-        job = self.model('job', 'jobs').load(job['_id'], force=True)
-        self.assertEqual(job['log'], 'job ran!')
+        job = self.model('job', 'jobs').load(job['_id'], force=True,
+                                             includeLog=True)
+        self.assertEqual(job['log'], ['job ran!'])
 
         job = self.model('job', 'jobs').createLocalJob(
             title='local', type='local', user=self.users[0], kwargs={
@@ -318,8 +397,9 @@ class JobsTestCase(base.TestCase):
 
         self.model('job', 'jobs').scheduleJob(job)
 
-        job = self.model('job', 'jobs').load(job['_id'], force=True)
-        self.assertEqual(job['log'], 'job failed')
+        job = self.model('job', 'jobs').load(job['_id'], force=True,
+                                             includeLog=True)
+        self.assertEqual(job['log'], ['job failed'])
 
     def testValidateCustomStatus(self):
         jobModel = self.model('job', 'jobs')
@@ -337,3 +417,81 @@ class JobsTestCase(base.TestCase):
 
             with self.assertRaises(ValidationException):
                 jobModel.updateJob(job, status=4321)  # Should fail
+
+    def testValidateCustomStrStatus(self):
+        jobModel = self.model('job', 'jobs')
+        job = jobModel.createJob(title='test', type='x', user=self.users[0])
+
+        def validateStatus(event):
+            states = ['a', 'b', 'c']
+
+            if event.info in states:
+                event.preventDefault().addResponse(True)
+
+        with self.assertRaises(ValidationException):
+            jobModel.updateJob(job, status='a')
+
+        with events.bound('jobs.status.validate', 'test', validateStatus):
+            jobModel.updateJob(job, status='a')
+            self.assertEqual(job['status'], 'a')
+
+        with self.assertRaises(ValidationException), \
+                events.bound('jobs.status.validate', 'test', validateStatus):
+            jobModel.updateJob(job, status='foo')
+
+    def testUpdateOtherFields(self):
+        jobModel = self.model('job', 'jobs')
+        job = jobModel.createJob(title='test', type='x', user=self.users[0])
+        job = jobModel.updateJob(job, otherFields={'other': 'fields'})
+        self.assertEqual(job['other'], 'fields')
+
+    def testCancelJob(self):
+        jobModel = self.model('job', 'jobs')
+        job = jobModel.createJob(title='test', type='x', user=self.users[0])
+        # add to the log
+        job = jobModel.updateJob(job, log='entry 1\n')
+        # Reload without the log
+        job = jobModel.load(id=job['_id'], force=True)
+        self.assertEqual(len(job.get('log', [])), 0)
+        # Cancel
+        job = jobModel.cancelJob(job)
+        self.assertEqual(job['status'], JobStatus.CANCELED)
+        # Reloading should still have the log and be canceled
+        job = jobModel.load(id=job['_id'], force=True, includeLog=True)
+        self.assertEqual(job['status'], JobStatus.CANCELED)
+        self.assertEqual(len(job.get('log', [])), 1)
+
+    def testJobsTypesAndStatuses(self):
+        self.model('job', 'jobs').createJob(
+            title='user 0 job', type='t1', user=self.users[0], public=False)
+
+        self.model('job', 'jobs').createJob(
+            title='user 1 job', type='t2', user=self.users[1], public=False)
+
+        self.model('job', 'jobs').createJob(
+            title='user 1 job', type='t3', user=self.users[1], public=True)
+
+        self.model('job', 'jobs').createJob(
+            title='user 2 job', type='t4', user=self.users[2])
+
+        self.model('job', 'jobs').createJob(
+            title='anonymous job', type='t5')
+
+        self.model('job', 'jobs').createJob(
+            title='anonymous public job', type='t6', public=True)
+
+        # User 1, as non site admin, should encounter http 403 (Forbidden)
+        resp = self.request('/job/typeandstatus/all', user=self.users[1])
+        self.assertStatus(resp, 403)
+
+        # Admin user gets all types and statuses
+        resp = self.request('/job/typeandstatus/all', user=self.users[0])
+        self.assertStatusOk(resp)
+        self.assertEqual(len(resp.json['types']), 6)
+        self.assertEqual(len(resp.json['statuses']), 1)
+
+        # standard user gets types and statuses of its own jobs
+        resp = self.request('/job/typeandstatus', user=self.users[1])
+        self.assertStatusOk(resp)
+        self.assertEqual(len(resp.json['types']), 2)
+        self.assertEqual(len(resp.json['statuses']), 1)

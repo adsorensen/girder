@@ -11,6 +11,16 @@ much easier to upload a large, nested hierarchy of data from a local directory
 to Girder, and also makes it much easier to download a large, nested hierarchy
 of data from Girder to a local directory.
 
+Versioning
+----------
+
+The Girder python client is :ref:`versioned <releasepythonclientpackage>`
+separately from the Girder server, but not fully independently because the
+client and server are coupled. The design intent is that every version of the
+client should work with every version of the server, though this is not an
+explicit guarantee.  Generally you should use the latest version of the Girder
+python client that is installable from pip.
+
 Installation
 ------------
 
@@ -19,6 +29,19 @@ package within the ``clients/python`` directory. If you do not have the source
 directory of Girder, you can install the client via pip: ::
 
     pip install girder-client
+
+
+After installing the client via pip and if you are using ``bash``,
+auto-completion can easily be enabled executing:
+
+::
+
+    eval "$(_GIRDER_CLI_COMPLETE=source girder-cli)"
+
+For convenience, adding this line at the end of ``.bashrc`` will make sure
+auto-completion is always available.
+
+For more details, see http://click.pocoo.org/6/bashcomplete/
 
 The Command Line Interface
 --------------------------
@@ -32,7 +55,15 @@ pip, you can use the special ``girder-cli`` executable: ::
 
 Otherwise you can equivalently just invoke the module directly: ::
 
-    python -m girder_client <arguments>
+    python -m girder_client <command> <arguments>
+
+To see all available commands, run: ::
+
+    girder-cli --help
+
+For help with a specific command, run: ::
+
+    girder-cli <command> --help
 
 Specifying the Girder Instance
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -42,58 +73,61 @@ you wish to connect to. The easiest way to do so is to pass the full URL to the
 REST API of the Girder instance you wish to connect to using the ``api-url``
 argument to ``girder-cli``. For example: ::
 
-    girder-cli --api-url http://localhost:8080/api/v1 ...
+    girder-cli --api-url http://localhost:8080/api/v1 <command> ...
 
-You may also specify the URL in parts, using the ``host`` argument, and optional
-``scheme``, ``port``, and ``api-root`` args. ::
 
-    girder-cli --host girder.example.com ...
+Instead of using ``api-url`` argument, you may also specify the URL in parts, using the
+``host`` argument, and optional ``scheme``, ``port``, and ``api-root`` args.
 
-Or... ::
+Specifying credentials
+^^^^^^^^^^^^^^^^^^^^^^
 
-    girder-cli --host girder.example.com --scheme https --port 443 --api-root /api/v1 ...
+The recommended way is to generate an :ref:`API key <api_keys>` and specify
+the ``api-key`` argument. ::
+
+    girder-cli --api-url https://girder.example.com:443/api/v1  --api-key abcdefghijklmopqrstuvwxyz012345678901234 ...
+
+Setting the ``GIRDER_API_KEY`` environment variable is also supported: ::
+
+    export GIRDER_API_KEY=abcdefghijklmopqrstuvwxyz012345678901234
+    girder-cli --api-url https://girder.example.com:443/api/v1 ...
+
+The client also supports ``username`` and ``password`` args. If only the
+``username`` is specified, the client will prompt the user to interactively
+input their password.
 
 Upload a local file hierarchy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The girder_client can upload to an S3 Assetstore when uploading to a Girder server
-that is version 1.3.0 or later.
-
-The upload command, ``-c upload``, is the default, so the following two forms
-are equivalent ::
-
-    girder-cli
-    girder-cli -c upload
 
 To upload a folder hierarchy rooted at `test_folder` to the Girder Folder with
 id `54b6d41a8926486c0cbca367` ::
 
 
-    girder-cli 54b6d41a8926486c0cbca367 test_folder
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder
 
 When using the upload command, the default ``--parent-type``, meaning the type
 of resource the local folder will be created under in Girder, is Folder, so the
 following are equivalent ::
 
-    girder-cli 54b6d41a8926486c0cbca367 test_folder
-    girder-cli 54b6d41a8926486c0cbca367 test_folder --parent-type folder
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder --parent-type folder
 
 To upload that same local folder to a Collection or User, specify the parent
 type as follows ::
 
-    girder-cli 54b6d41a8926486c0cbca459 test_folder --parent-type user
+    girder-cli upload 54b6d41a8926486c0cbca459 test_folder --parent-type user
 
 To see what local folders and files on disk would be uploaded without actually
-uploading anything, add the ``--dryrun`` flag ::
+uploading anything, add the ``--dry-run`` flag ::
 
-    girder-cli 54b6d41a8926486c0cbca367 test_folder --dryrun
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder --dry-run
 
 To have leaf folders (those folders with no subfolders, only containing files)
 be uploaded to Girder as single Items with multiple Files, i.e. those leaf
 folders will be created as Items and all files within the leaf folders will be
 Files within those Items, add the ``--leaf-folders-as-items`` flag ::
 
-    girder-cli 54b6d41a8926486c0cbca367 test_folder --leaf-folders-as-items
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder --leaf-folders-as-items
 
 If you already have an existing Folder hierarchy in Girder which you have a
 superset of on your local disk (e.g. you previously uploaded a hierarchy to
@@ -103,22 +137,65 @@ Items for those that match folders and files on disk, by using the ``--reuse`` f
 
 ::
 
-    girder-cli 54b6d41a8926486c0cbca367 test_folder --reuse
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder --reuse
 
 To include a blacklist of file patterns that will not be uploaded, pass a comma
 separated list to the ``--blacklist`` arg ::
 
-    girder-cli 54b6d41a8926486c0cbca367 test_folder --blacklist .DS_Store
+    girder-cli upload 54b6d41a8926486c0cbca367 test_folder --blacklist .DS_Store
 
-Download a Folder hierarchy into a local folder
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. note: The girder_client can upload to an S3 Assetstore when uploading to a Girder server
+         that is version 1.3.0 or later.
+
+Download a hierarchy of data into a local folder
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Folder
+""""""
 
 To download a Girder Folder hierarchy rooted at Folder id
 `54b6d40b8926486c0cbca364` under the local folder `download_folder` ::
 
-    girder-cli -c download 54b6d40b8926486c0cbca364 download_folder
+    girder-cli download 54b6d40b8926486c0cbca364 download_folder
 
-Downloading is only supported from a parent type of Folder.
+
+Collection
+""""""""""
+
+To download the Girder Folder hierarchies associated with a Girder Collection
+with id `57b5c9e58d777f126827f5a1` under the local folder `download_folder` ::
+
+    girder-cli download --parent-type collection 57b5c9e58d777f126827f5a1 download_folder
+
+User
+""""
+
+To download the Girder Folder hierarchies associated with a Girder User
+with id `54f8ac238d777f69813604af` under the local folder `download_folder` ::
+
+    girder-cli download --parent-type user 54b6d40b8926486c0cbca364 download_folder
+
+Item
+""""
+
+To download the file(s) associated with a Girder Item with if `58b8eb798d777f0aef5d0f78` under
+the local folder `download_folder`::
+
+    girder-cli download --parent-type item 8b8eb798d777f0aef5d0f78 download_folder
+
+Auto-detecting parent-type
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Both download and upload commands accept a `--parent-type` argument allowing the users
+to specify the type (folder, collection, user, or item) associated with the chosen
+object id.
+
+If the argument is omitted, the client will conveniently try to autodetect the type
+by iteratively invoking the `resource/%id/path?type=%type` API end point and checking
+if a resource is found.
+
+Note that relying on auto-detection incurs extra network requests, which will slow down
+the script, so it should be avoided for time-sensitive operations.
 
 Synchronize local folder with a Folder hierarchy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -127,13 +204,13 @@ If the `download_folder` is a local copy of a Girder Folder hierarchy rooted at
 Folder id `54b6d40b8926486c0cbca364`, any change made to the Girder Folder remotely
 can be synchronized locally by ::
 
-    girder-cli -c localsync 54b6d40b8926486c0cbca364 download_folder
+    girder-cli localsync 54b6d40b8926486c0cbca364 download_folder
 
 This will only download new Items or Items that have been modified since the
 last download/localsync. Local files that are no longer present in the remote
 Girder Folder will not be removed. This command relies on a presence of
 metadata file `.metadata-girder` within `download_folder`, which is created
-upon `girder-cli -c download`. If `.metadata-girder` is not present,
+upon `girder-cli download`. If `.metadata-girder` is not present,
 `localsync` will fallback to `download`.
 
 The Python Client Library
@@ -171,24 +248,25 @@ and Items are uploaded to the Folder.
     import girder_client
     gc = girder_client.GirderClient()
 
-    def folder_callback(folder, filepath):
-        # assume we have a folder_metadata dict that has
+    def folderCallback(folder, filepath):
+        # assume we have a folderMetadata dict that has
         # filepath: metadata_dict_for_folder
-        gc.addMetadataToFolder(folder['_id'], folder_metadata[filepath])
+        gc.addMetadataToFolder(folder['_id'], folderMetadata[filepath])
 
-    def item_callback(item, filepath):
-        # assume we have an item_metadata dict that has
+    def itemCallback(item, filepath):
+        # assume we have an itemMetadata dict that has
         # filepath: metadata_dict_for_item
-        gc.addMetadataToItem(item['_id'], item_metadata[filepath])
+        gc.addMetadataToItem(item['_id'], itemMetadata[filepath])
 
     gc.authenticate('username', 'password')
-    gc.add_folder_upload_callback(folder_callback)
-    gc.add_item_upload_callback(item_callback)
-    gc.upload(local_folder, parent_id)
+    gc.addFolderUploadCallback(folderCallback)
+    gc.addItemUploadCallback(itemCallback)
+    gc.upload(localFolder, parentId)
 
 
 Further Examples and Function Level Documentation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. automodule:: girder_client
+    :special-members: __init__
     :members:

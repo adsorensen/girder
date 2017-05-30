@@ -106,11 +106,70 @@ class WorkerTestCase(base.TestCase):
             })
 
             sendTaskCalls = celeryMock.return_value.send_task.mock_calls
+
             self.assertEqual(len(sendTaskCalls), 1)
             self.assertEqual(sendTaskCalls[0][1], (
                 'girder_worker.run', job['args'], job['kwargs']))
+
+            self.assertTrue('headers' in sendTaskCalls[0][2])
+            self.assertTrue('jobInfoSpec' in sendTaskCalls[0][2]['headers'])
 
             # Make sure we got and saved the celery task id
             job = jobModel.load(job['_id'], force=True)
             self.assertEqual(job['celeryTaskId'], 'fake_id')
             self.assertEqual(job['status'], JobStatus.QUEUED)
+
+    def testWorkerDifferentTask(self):
+        # Test the settings
+        resp = self.request('/system/setting', method='PUT', params={
+            'key': worker.PluginSettings.API_URL,
+            'value': 'bad value'
+        }, user=self.admin)
+        self.assertStatus(resp, 400)
+        self.assertEqual(resp.json['message'], 'API URL must start with http:// or https://.')
+
+        resp = self.request('/system/setting', method='PUT', params={
+            'list': json.dumps([{
+                'key': worker.PluginSettings.BROKER,
+                'value': 'amqp://guest@broker.com'
+            }, {
+                'key': worker.PluginSettings.BACKEND,
+                'value': 'amqp://guest@backend.com'
+            }])
+        }, user=self.admin)
+        self.assertStatusOk(resp)
+
+        # Create a job to be handled by the worker plugin
+        jobModel = self.model('job', 'jobs')
+        job = jobModel.createJob(
+            title='title', type='foo', handler='worker_handler',
+            user=self.admin, public=False, args=(), kwargs={},
+            otherFields={
+                'celeryTaskName': 'some_other.task',
+                'celeryQueue': 'my_other_q'
+            })
+
+        job['kwargs'] = {
+            'jobInfo': utils.jobInfoSpec(job),
+            'inputs': [
+                utils.girderInputSpec(self.adminFolder, resourceType='folder')
+            ],
+            'outputs': [
+                utils.girderOutputSpec(self.adminFolder, token=self.adminToken)
+            ]
+        }
+        job = jobModel.save(job)
+
+        # Schedule the job, make sure it is sent to celery
+        with mock.patch('celery.Celery') as celeryMock:
+            instance = celeryMock.return_value
+            instance.send_task.return_value = FakeAsyncResult()
+
+            jobModel.scheduleJob(job)
+
+            sendTaskCalls = celeryMock.return_value.send_task.mock_calls
+            self.assertEqual(len(sendTaskCalls), 1)
+            self.assertEqual(sendTaskCalls[0][1], (
+                'some_other.task', job['args'], job['kwargs']))
+            self.assertIn('queue', sendTaskCalls[0][2])
+            self.assertEqual(sendTaskCalls[0][2]['queue'], 'my_other_q')

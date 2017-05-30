@@ -21,10 +21,9 @@ import datetime
 import os
 import re
 
-from .model_base import AccessControlledModel, ValidationException
+from .model_base import AccessControlledModel, AccessException, ValidationException
 from girder import events
-from girder.constants import AccessType, CoreEventHandler, SettingKey, \
-    TokenScope
+from girder.constants import AccessType, CoreEventHandler, SettingKey, TokenScope
 from girder.utility import config, mail_utils
 
 
@@ -58,19 +57,6 @@ class User(AccessControlledModel):
                     CoreEventHandler.USER_DEFAULT_FOLDERS,
                     self._addDefaultFolders)
 
-    def filter(self, *args, **kwargs):
-        """
-        Preserved override for kwarg backwards compatibility. Prior to the
-        refactor for centralizing model filtering, this method's first formal
-        parameter was called "folder", whereas the centralized version's first
-        parameter is called "doc". This override simply detects someone using
-        the old kwarg and converts it to the new form.
-        """
-        if 'currentUser' in kwargs and 'user' in kwargs:
-            args = [kwargs.pop('user')] + list(args)
-            kwargs['user'] = kwargs.pop('currentUser')
-        return super(User, self).filter(*args, **kwargs)
-
     def validate(self, doc):
         """
         Validate the user every time it is stored in the database.
@@ -79,6 +65,7 @@ class User(AccessControlledModel):
         doc['email'] = doc.get('email', '').lower().strip()
         doc['firstName'] = doc.get('firstName', '').strip()
         doc['lastName'] = doc.get('lastName', '').strip()
+        doc['status'] = doc.get('status', 'enabled')
 
         cur_config = config.getConfig()
 
@@ -132,8 +119,55 @@ class User(AccessControlledModel):
         existing = self.findOne({})
         if existing is None:
             doc['admin'] = True
+            # Ensure settings don't stop this user from logging in
+            doc['emailVerified'] = True
+            doc['status'] = 'enabled'
 
         return doc
+
+    def authenticate(self, login, password):
+        """
+        Validate a user login via username and password. If authentication fails,
+        a ``AccessException`` is raised.
+
+        :param login: The user's login or email.
+        :type login: str
+        :param password: The user's password.
+        :type password: str
+        :returns: The corresponding user if the login was successful.
+        :rtype: dict
+        """
+        event = events.trigger('model.user.authenticate', {
+            'login': login,
+            'password': password
+        })
+
+        if event.defaultPrevented and len(event.responses):
+            return event.responses[-1]
+
+        login = login.lower().strip()
+        loginField = 'email' if '@' in login else 'login'
+
+        user = self.model('user').findOne({loginField: login})
+        if user is None:
+            raise AccessException('Login failed.')
+
+        if not self.model('password').authenticate(user, password):
+            raise AccessException('Login failed.')
+
+        # This has the same behavior as User.canLogin, but returns more
+        # detailed error messages
+        if user.get('status', 'enabled') == 'disabled':
+            raise AccessException('Account is disabled.', extra='disabled')
+
+        if self.model('user').emailVerificationRequired(user):
+            raise AccessException(
+                'Email verification required.', extra='emailVerification')
+
+        if self.model('user').adminApprovalRequired(user):
+            raise AccessException('Account approval required.', extra='accountApproval')
+
+        return user
 
     def remove(self, user, progress=None, **kwargs):
         """
@@ -270,6 +304,8 @@ class User(AccessControlledModel):
         Returns True if the user is allowed to login, e.g. email verification
         is not needed and admin approval is not needed.
         """
+        if user.get('status', 'enabled') == 'disabled':
+            return False
         if self.emailVerificationRequired(user):
             return False
         if self.adminApprovalRequired(user):
@@ -281,27 +317,20 @@ class User(AccessControlledModel):
         Returns True if email verification is required and this user has not
         yet verified their email address.
         """
-        if user.get('admin'):
-            return False
-        if not user.get('emailVerified', False):
-            return self.model('setting').get(
-                SettingKey.EMAIL_VERIFICATION) == 'required'
-        return False
+        return (not user['emailVerified']) and self.model('setting').get(
+            SettingKey.EMAIL_VERIFICATION) == 'required'
 
     def adminApprovalRequired(self, user):
         """
         Returns True if the registration policy requires admin approval and
-        this user has not yet been approved.
+        this user is pending approval.
         """
-        if user.get('admin'):
-            return False
-        if user.get('status') != 'enabled':
-            return self.model('setting').get(
+        return user.get('status', 'enabled') == 'pending' and \
+            self.model('setting').get(
                 SettingKey.REGISTRATION_POLICY) == 'approve'
-        return False
 
     def _sendApprovalEmail(self, user):
-        url = '%s/#user/%s' % (
+        url = '%s#user/%s' % (
             mail_utils.getEmailUrlPrefix(), str(user['_id']))
         text = mail_utils.renderTemplate('accountApproval.mako', {
             'user': user,
@@ -325,7 +354,7 @@ class User(AccessControlledModel):
     def _sendVerificationEmail(self, user):
         token = self.model('token').createToken(
             user, days=1, scope=TokenScope.EMAIL_VERIFICATION)
-        url = '%s/#useraccount/%s/verification/%s' % (
+        url = '%s#useraccount/%s/verification/%s' % (
             mail_utils.getEmailUrlPrefix(), str(user['_id']), str(token['_id']))
         text = mail_utils.renderTemplate('emailVerification.mako', {
             'url': url
@@ -455,25 +484,26 @@ class User(AccessControlledModel):
             return sum(1 for _ in folderModel.filterResultsByPermission(
                 cursor=folders, user=filterUser, level=level))
 
-    def updateSize(self, doc, user):
+    def updateSize(self, doc):
         """
         Recursively recomputes the size of this user and its underlying
         folders and fixes the sizes as needed.
 
         :param doc: The user.
         :type doc: dict
-        :param user: The admin user for permissions.
-        :type user: dict
         """
         size = 0
         fixes = 0
-        folders = self.model('folder').childFolders(doc, 'user', user)
+        folders = self.model('folder').find({
+            'parentId': doc['_id'],
+            'parentCollection': 'user'
+        })
         for folder in folders:
             # fix folder size if needed
-            _, f = self.model('folder').updateSize(folder, user)
+            _, f = self.model('folder').updateSize(folder)
             fixes += f
             # get total recursive folder size
-            folder = self.model('folder').load(folder['_id'], user=user)
+            folder = self.model('folder').load(folder['_id'], force=True)
             size += self.model('folder').getSizeRecursive(folder)
         # fix value if incorrect
         if size != doc.get('size'):

@@ -22,12 +22,6 @@ add_custom_target(
   DEPENDS "${virtualenv_python}"
 )
 
-configure_file(
-  "${PROJECT_SOURCE_DIR}/tests/packaging/mocks/npm.in"
-  "${PROJECT_BINARY_DIR}/mockpath/npm"
-  @ONLY
-)
-
 add_test(
   NAME packaging_generate
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
@@ -35,7 +29,7 @@ add_test(
 )
 
 set_property(TEST packaging_generate
-  PROPERTY LABELS girder_python
+  PROPERTY LABELS girder_package
 )
 
 add_test(
@@ -45,7 +39,7 @@ add_test(
 )
 
 set_property(TEST packaging_verify_contents
-  PROPERTY LABELS girder_python
+  PROPERTY LABELS girder_package
 )
 set_property(TEST packaging_verify_contents
   PROPERTY DEPENDS packaging_generate
@@ -64,7 +58,7 @@ add_test(
 )
 
 set_property(TEST packaging_install
-  PROPERTY LABELS girder_python
+  PROPERTY LABELS girder_package
 )
 set_property(TEST packaging_install
   PROPERTY DEPENDS "packaging_generate"
@@ -83,7 +77,7 @@ add_test(
 )
 
 set_property(TEST packaging_plugin_install
-  PROPERTY LABELS girder_python
+  PROPERTY LABELS girder_package
 )
 set_property(TEST packaging_plugin_install
   PROPERTY DEPENDS "packaging_install"

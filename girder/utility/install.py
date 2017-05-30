@@ -24,14 +24,23 @@ be restarted for these changes to take effect.
 
 import os
 import pip
+import re
+import select
 import shutil
+import six
 import subprocess
+import string
+import sys
 
 from girder import constants
-from girder.utility.plugin_utilities import getPluginDir
+from girder.utility import model_importer, plugin_utilities
 
 version = constants.VERSION['apiVersion']
 webRoot = os.path.join(constants.STATIC_ROOT_DIR, 'clients', 'web')
+
+# monkey patch shutil for python < 3
+if sys.version_info[0] == 2:
+    import shutilwhich  # noqa
 
 
 def print_version(parser):
@@ -39,7 +48,7 @@ def print_version(parser):
 
 
 def print_plugin_path(parser):
-    print(getPluginDir())
+    print(plugin_utilities.getPluginDir())
 
 
 def print_web_root(parser):
@@ -58,32 +67,146 @@ def fix_path(path):
     return os.path.abspath(os.path.expanduser(path))
 
 
-def runNpmInstall(wd=None, dev=False, npm='npm'):
+def _getPluginBuildArgs(buildAll, plugins):
+    if buildAll:
+        sortedPlugins = plugin_utilities.getToposortedPlugins()
+        return ['--plugins=%s' % ','.join(sortedPlugins)]
+    elif not plugins:  # build only the enabled plugins
+        settings = model_importer.ModelImporter().model('setting')
+        plugins = settings.get(constants.SettingKey.PLUGINS_ENABLED, default=())
+
+    plugins = list(plugin_utilities.getToposortedPlugins(plugins, ignoreMissing=True))
+
+    # include static-only dependencies that are not in the runtime load set
+    staticPlugins = plugin_utilities.getToposortedPlugins(
+        plugins, ignoreMissing=True, keys=('dependencies', 'staticWebDependencies'))
+    staticPlugins = [p for p in staticPlugins if p not in plugins]
+
+    return [
+        '--plugins=%s' % ','.join(plugins),
+        '--configure-plugins=%s' % ','.join(staticPlugins)
+    ]
+
+
+def _pipeOutputToProgress(proc, progress):
     """
-    Use this to run `npm install` inside the package.
+    Pipe the latest contents of the stdout and stderr pipes of a subprocess into the
+    message of a progress context.
+
+    :param proc: The subprocess to listen to.
+    :type proc: subprocess.Popen
+    :param progress: The progress context.
+    :type progress: girder.utility.progress.ProgressContext
     """
+    fds = [proc.stdout, proc.stderr]
+    while True:
+        ready = select.select(fds, (), fds, 1)[0]
+
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe in ready:
+                buf = os.read(pipe.fileno(), 1024)
+                if buf:
+                    buf = buf.decode('utf8', errors='ignore')
+                    # Remove ANSI escape sequences
+                    buf = re.sub('(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]', '', buf)
+                    # Filter out non-printable characters
+                    msg = ''.join(c for c in buf if c in string.printable)
+                    if msg:
+                        progress.update(message=msg)
+                else:
+                    pipe.close()
+                    fds.remove(pipe)
+        if (not fds or not ready) and proc.poll() is not None:
+            break
+        elif not fds and proc.poll() is None:
+            proc.wait()
+
+
+def runWebBuild(wd=None, dev=False, npm='npm', allPlugins=False, plugins=None, progress=None):
+    """
+    Use this to run `npm install` inside the package. Also builds the web code
+    using `npm run build`.
+
+    :param wd: Working directory to use. If not specified, uses the girder package directory.
+    :param dev: Whether to build the code in dev mode.
+    :type dev: bool
+    :param npm: Path to the npm executable to use.
+    :type npm: str
+    :param allPlugins: Enable this to build all available plugins as opposed to only enabled ones.
+    :type allPlugins: bool
+    :param plugins: A specific set of plugins to build.
+    :type plugins: str, list or None
+    :param progress: A progress context for reporting output of the tasks.
+    :type progress: ``girder.utility.progress.ProgressContext`` or None
+    """
+    if isinstance(plugins, six.string_types) and plugins:
+        plugins = plugins.split(',')
+
+    if shutil.which(npm) is None:
+        print(constants.TerminalColor.error(
+            'No npm executable was detected.  Please ensure the npm '
+            'executable is in your path, or use the "--npm" option to '
+            'provide a custom path.'
+        ))
+        raise Exception('npm executable not found')
+
+    npmInstall = [npm, 'install', '--unsafe-perm']
+    if not dev:
+        npmInstall.append('--production')
+
     wd = wd or constants.PACKAGE_DIR
+    env = 'dev' if dev else 'prod'
+    quiet = '--no-progress=false' if sys.stdout.isatty() else '--no-progress=true'
+    commands = [
+        npmInstall,
+        [npm, 'run', 'build', '--',
+         quiet, '--env=%s' % env] + _getPluginBuildArgs(allPlugins, plugins)
+    ]
 
-    args = (npm, 'install', '--production', '--unsafe-perm') if not dev \
-        else (npm, 'install', '--unsafe-perm')
+    for cmd in commands:
+        if progress and progress.on:
+            proc = subprocess.Popen(cmd, cwd=wd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            _pipeOutputToProgress(proc, progress)
+        else:
+            proc = subprocess.Popen(cmd, cwd=wd)
+            proc.communicate()
 
-    proc = subprocess.Popen(args, cwd=wd)
-    proc.communicate()
+        if proc.returncode != 0:
+            raise Exception('Web client install failed: `%s` returned %s.' %
+                            (' '.join(cmd), proc.returncode))
 
-    if proc.returncode != 0:
-        raise Exception('Web client install failed: npm install returned %s.' %
-                        proc.returncode)
+
+def _runWatchCmd(*args):
+    try:
+        subprocess.Popen(args, cwd=constants.PACKAGE_DIR).wait()
+    except KeyboardInterrupt:
+        pass
 
 
 def install_web(opts=None):
     """
-    Build and install Girder's web client. This runs `npm install` to execute
-    the entire build and install process.
+    Build and install Girder's web client, or perform a watch on the web
+    client or a specified plugin. For documentation of all the options, see
+    the argparse configuration for the "web" subcommand in the main() function.
     """
     if opts is None:
-        runNpmInstall()
+        runWebBuild()
+    elif opts.watch:
+        _runWatchCmd('npm', 'run', 'watch')
+    elif opts.watch_plugin:
+        staticPlugins = plugin_utilities.getToposortedPlugins(
+            [opts.watch_plugin], ignoreMissing=True,
+            keys=('dependencies', 'staticWebDependencies'))
+        staticPlugins = [p for p in staticPlugins if p != opts.watch_plugin]
+
+        _runWatchCmd(
+            'npm', 'run', 'watch', '--', '--plugins=%s' % opts.watch_plugin,
+            '--configure-plugins=%s' % ','.join(staticPlugins),
+            'webpack:%s_%s' % (opts.plugin_prefix, opts.watch_plugin))
     else:
-        runNpmInstall(dev=opts.development, npm=opts.npm)
+        runWebBuild(
+            dev=opts.development, npm=opts.npm, allPlugins=opts.all_plugins,
+            plugins=opts.plugins)
 
 
 def install_plugin(opts):
@@ -107,21 +230,19 @@ def install_plugin(opts):
         if not os.path.isdir(pluginPath):
             raise Exception('Invalid plugin directory: %s' % pluginPath)
 
-        requirements = [os.path.join(pluginPath, 'requirements.txt')]
-        if opts.development:
-            requirements.extend([os.path.join(pluginPath,
-                                              'requirements-dev.txt')])
-        for reqs in requirements:
-            if os.path.isfile(reqs):
-                print(constants.TerminalColor.info(
-                    'Installing pip requirements for %s from %s.' %
-                    (name, reqs)))
+        if not opts.skip_requirements:
+            requirements = [os.path.join(pluginPath, 'requirements.txt')]
+            if opts.development:
+                requirements.append(os.path.join(pluginPath, 'requirements-dev.txt'))
+            for reqs in requirements:
+                if os.path.isfile(reqs):
+                    print(constants.TerminalColor.info(
+                        'Installing pip requirements for %s from %s.' % (name, reqs)))
 
-                if pip.main(['install', '-r', reqs]) != 0:
-                    raise Exception(
-                        'Failed to install pip requirements at %s.' % reqs)
+                    if pip.main(['install', '-r', reqs]) != 0:
+                        raise Exception('Failed to install pip requirements at %s.' % reqs)
 
-        targetPath = os.path.join(getPluginDir(), name)
+        targetPath = os.path.join(plugin_utilities.getPluginDir(), name)
 
         if (os.path.isdir(targetPath) and
                 os.path.samefile(pluginPath, targetPath) and not
@@ -142,15 +263,13 @@ def install_plugin(opts):
                     shutil.rmtree(targetPath)
 
             else:
-                raise Exception('Plugin already exists at %s, use "-f" to '
-                                'overwrite the existing directory.' % (
-                                    targetPath, ))
+                raise Exception(
+                    'Plugin already exists at %s, use "-f" to overwrite the existing directory.' %
+                    targetPath)
         if opts.symlink:
             os.symlink(pluginPath, targetPath)
         else:
             shutil.copytree(pluginPath, targetPath)
-
-    runNpmInstall(dev=opts.development, npm=opts.npm)
 
 
 def main():
@@ -175,11 +294,14 @@ def main():
     plugin.add_argument('-s', '--symlink', action='store_true',
                         help='Install by symlinking to the plugin directory.')
 
+    plugin.add_argument('--skip-requirements', action='store_true',
+                        help='Skip the step of pip installing the requirements.txt file.')
+
     plugin.add_argument('--dev', action='store_true',
                         dest='development',
-                        help='Install server/client development dependencies')
+                        help='Install development dependencies')
 
-    plugin.add_argument('--npm', default="npm",
+    plugin.add_argument('--npm', default='npm',
                         help='specify the full path to the npm executable.')
 
     plugin.add_argument('plugin', nargs='+',
@@ -191,8 +313,18 @@ def main():
                      dest='development',
                      help='Install client development dependencies')
 
-    web.add_argument('--npm', default="npm",
+    web.add_argument('--npm', default='npm',
                      help='specify the full path to the npm executable.')
+    web.add_argument('--all-plugins', action='store_true',
+                     help='build all available plugins rather than just enabled ones')
+    web.add_argument('--plugins', default='', help='comma-separated list of plugins to build')
+    web.add_argument('--watch', action='store_true',
+                     help='watch for changes and rebuild girder core library in dev mode')
+    web.add_argument('--watch-plugin', default='',
+                     help='watch for changes and rebuild a specific plugin in dev mode')
+
+    web.add_argument('--plugin-prefix', default='plugin',
+                     help='prefix of the generated plugin bundle')
 
     web.set_defaults(func=install_web)
 
@@ -210,6 +342,7 @@ def main():
 
     parsed = parser.parse_args()
     parsed.func(parsed)
+
 
 if __name__ == '__main__':
     main()  # pragma: no cover

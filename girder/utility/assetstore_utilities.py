@@ -21,7 +21,6 @@ from .filesystem_assetstore_adapter import FilesystemAssetstoreAdapter
 from .gridfs_assetstore_adapter import GridFsAssetstoreAdapter
 from .s3_assetstore_adapter import S3AssetstoreAdapter
 from girder.constants import AssetstoreType
-from girder import events
 
 
 _assetstoreTable = {
@@ -49,11 +48,7 @@ def getAssetstoreAdapter(assetstore, instance=True):
 
     cls = _assetstoreTable.get(storeType)
     if cls is None:
-        e = events.trigger('assetstore.adapter.get', assetstore)
-        if len(e.responses) > 0:
-            cls = e.responses[-1]
-        else:
-            raise Exception('No AssetstoreAdapter for type: %s.' % storeType)
+        raise Exception('No AssetstoreAdapter for type: %s.' % storeType)
 
     if instance:
         return cls(assetstore)
@@ -72,7 +67,7 @@ def setAssetstoreAdapter(storeType, cls):
     :param storeType: The assetstore type to create/modify.
     :type storeType: enum | any
     :param cls: The new assetstore adapter class to install in the table. This
-    should be an adapter descending from AbstractAssetstoreAdapter.
+        should be an adapter descending from AbstractAssetstoreAdapter.
     :type cls: AbstractAssetstoreAdapter
     """
     _assetstoreTable[storeType] = cls

@@ -1,9 +1,7 @@
-/* globals waitsFor, runs, girderTest, expect, describe, it, beforeEach, afterEach */
 // girderTest.startApp();
 
 describe('Test the hierarchy browser modal', function () {
     var testEl;
-    var restRequest;
     var requestArgs = [];
     var requestContext = [];
     var returnVal;
@@ -12,30 +10,31 @@ describe('Test the hierarchy browser modal', function () {
 
     beforeEach(function () {
         testEl = $('<div/>').appendTo('body');
-        restRequest = girder.restRequest;
         returnVal = null;
-        girder.restRequest = function () {
+        onRestRequest = null;
+        girder.rest.mockRestRequest(function () {
             requestContext.push(this);
             requestArgs.push(_.toArray(arguments));
             if (onRestRequest) {
                 return onRestRequest.apply(this, arguments);
             }
             return $.when(returnVal);
-        };
+        });
         transition = $.support.transition;
         $.support.transition = false;
     });
     afterEach(function () {
         testEl.remove();
-        girder.logout();
-        girder.restRequest = restRequest;
+        girder.auth.logout();
+        girder.rest.unmockRestRequest();
         $.support.transition = transition;
     });
 
     describe('root selection', function () {
         it('defaults', function () {
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({el: testEl, parentView: null});
+            var view = new girder.views.widgets.RootSelectorWidget({el: testEl, parentView: null});
+            view.render();
             var select = view.$('select#g-root-selector');
             expect(select.length).toBe(1);
             expect(select.find('option:eq(0)').text()).toBe('Select a root...');
@@ -45,11 +44,12 @@ describe('Test the hierarchy browser modal', function () {
 
         it('display order', function () {
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
+            var view = new girder.views.widgets.RootSelectorWidget({
                 el: testEl,
                 parentView: null,
                 display: ['Users']
             });
+            view.render();
             var select = view.$('select#g-root-selector');
             expect(select.length).toBe(1);
             expect(select.find('option:eq(0)').text()).toBe('Select a root...');
@@ -58,18 +58,19 @@ describe('Test the hierarchy browser modal', function () {
         });
 
         it('user logged in', function () {
-            girder.currentUser = new girder.models.UserModel({
+            girder.auth.setCurrentUser(new girder.models.UserModel({
                 _id: '0',
                 login: 'johndoe',
                 firstName: 'John',
                 lastName: 'Doe'
-            });
+            }));
 
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
+            var view = new girder.views.widgets.RootSelectorWidget({
                 el: testEl,
                 parentView: null
             });
+            view.render();
             var select = view.$('select#g-root-selector');
             expect(select.length).toBe(1);
             expect(select.find('option:eq(0)').text()).toBe('Select a root...');
@@ -78,11 +79,7 @@ describe('Test the hierarchy browser modal', function () {
 
         it('rerender on login', function () {
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
-                el: testEl,
-                parentView: null
-            });
-            returnVal = {
+            var user = {
                 user: {
                     _id: '0',
                     login: 'johndoe',
@@ -93,7 +90,24 @@ describe('Test the hierarchy browser modal', function () {
                     token: ''
                 }
             };
-            girder.login('johndoe', 'password');
+            var view = new girder.views.widgets.RootSelectorWidget({
+                el: testEl,
+                parentView: null
+            });
+            view.render();
+
+            onRestRequest = function (params) {
+                if (params.path === '/user/authentication') {
+                    // The return value for the initial login call
+                    return $.when(user);
+                }
+
+                // After login return an empty array for collection fetches
+                // on the RootSelector
+                return $.when([]);
+            };
+
+            girder.auth.login('johndoe', 'password');
 
             var select = view.$('select#g-root-selector');
             expect(select.length).toBe(1);
@@ -105,7 +119,7 @@ describe('Test the hierarchy browser modal', function () {
             var col = new girder.collections.CollectionCollection();
 
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
+            var view = new girder.views.widgets.RootSelectorWidget({
                 el: testEl,
                 parentView: null,
                 groups: {
@@ -113,7 +127,7 @@ describe('Test the hierarchy browser modal', function () {
                 },
                 display: ['Collections', 'Custom']
             });
-
+            view.render();
             var select = view.$('select#g-root-selector');
             expect(select.length).toBe(1);
             expect(select.find('option:eq(0)').text()).toBe('Select a root...');
@@ -151,7 +165,7 @@ describe('Test the hierarchy browser modal', function () {
             col.fetch();
 
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
+            var view = new girder.views.widgets.RootSelectorWidget({
                 el: testEl,
                 parentView: null,
                 groups: {
@@ -159,7 +173,7 @@ describe('Test the hierarchy browser modal', function () {
                 },
                 display: ['Collections', 'Custom']
             });
-
+            view.render();
             var called = 0;
             view.on('g:selected', function (evt) {
                 expect(evt.root.attributes).toEqual({
@@ -175,12 +189,12 @@ describe('Test the hierarchy browser modal', function () {
         });
 
         it('respond to Home selection', function () {
-            girder.currentUser = new girder.models.UserModel({
+            girder.auth.setCurrentUser(new girder.models.UserModel({
                 _id: '0',
                 login: 'johndoe',
                 firstName: 'John',
                 lastName: 'Doe'
-            });
+            }));
             returnVal = [
                 {_id: 'abc', name: 'custom 1', _modelType: 'collection'},
                 {_id: 'def', name: 'custom 2', _modelType: 'user', login: 'thelogin'},
@@ -190,7 +204,7 @@ describe('Test the hierarchy browser modal', function () {
             col.fetch();
 
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
+            var view = new girder.views.widgets.RootSelectorWidget({
                 el: testEl,
                 parentView: null,
                 groups: {
@@ -198,7 +212,7 @@ describe('Test the hierarchy browser modal', function () {
                 },
                 display: ['Home', 'Collections', 'Custom']
             });
-
+            view.render();
             var called = 0;
             view.on('g:selected', function (evt) {
                 expect(evt.root.attributes).toEqual({
@@ -224,7 +238,7 @@ describe('Test the hierarchy browser modal', function () {
             col.fetch();
 
             returnVal = [];
-            var view = new girder.views.RootSelectorWidget({
+            var view = new girder.views.widgets.RootSelectorWidget({
                 el: testEl,
                 parentView: null,
                 groups: {
@@ -233,7 +247,7 @@ describe('Test the hierarchy browser modal', function () {
                 display: ['Collections', 'Custom'],
                 selected: col.models[2]
             });
-
+            view.render();
             var select = view.$('select#g-root-selector');
             expect(select.length).toBe(1);
             expect(select.val()).toBe('123');
@@ -243,66 +257,100 @@ describe('Test the hierarchy browser modal', function () {
     describe('browser modal', function () {
         var view;
 
-        var hw;
         var hwSettings;
-        var hwCalls;
-        var hwView;
+        function fakeInitialize(settings) {
+            hwSettings = settings;
+            this.parentModel = settings.parentModel;
+        }
 
         beforeEach(function () {
-            hw = girder.views.HierarchyWidget;
-            hwCalls = 0;
-            girder.views.HierarchyWidget = Backbone.View.extend({
-                initialize: function (settings) {
-                    hwCalls += 1;
-                    hwSettings = settings;
-                    hwView = this;
-                    this.parentModel = settings.parentModel;
-                }
-            });
+            testEl.addClass('modal');
+            spyOn(girder.views.widgets.HierarchyWidget.prototype, 'render');
+            spyOn(girder.views.widgets.HierarchyWidget.prototype, 'initialize').andCallFake(fakeInitialize);
         });
         afterEach(function () {
             if (view) {
                 view.$el.modal('hide');
             }
-            girder.views.HierarchyWidget = hw;
         });
         it('defaults', function () {
             returnVal = [];
-            view = new girder.views.BrowserWidget({
-                parentView: null
+            view = new girder.views.widgets.BrowserWidget({
+                parentView: null,
+                el: testEl
             }).render();
 
             expect(view.$('.modal-title').text()).toBe('Select an item');
             expect(view.$('#g-root-selector').length).toBe(1);
 
-            view.$('.g-submit-button').click();
-            expect(view.$el.css('display')).toBe('none');
+            waitsFor(function () {
+                return $(view.$el).is(':visible');
+            });
+            runs(function () {
+                view.$('a:contains(Cancel)').click();
+                expect($(view.$el).is(':visible')).toBe(false);
+            });
         });
 
-        it('validation', function () {
-            returnVal = [];
-            view = new girder.views.BrowserWidget({
-                parentView: null,
-                validate: function () {return 'invalid';} 
-            }).render();
-
-            view.$('.g-submit-button').click();
-            expect(view.$el.hasClass('in')).toBe(true);
-            expect(view.$('.g-validation-failed-message').text()).toBe('invalid');
-            expect(view.$('.g-validation-falied-message').hasClass('hidden')).toBe(false);
-        });
-
-        it('render hierarchy', function () {
-            girder.currentUser = new girder.models.UserModel({
+        it('preview off', function () {
+            girder.auth.setCurrentUser(new girder.models.UserModel({
                 _id: '0',
                 login: 'johndoe',
                 firstName: 'John',
                 lastName: 'Doe'
+            }));
+
+            returnVal = [];
+            view = new girder.views.widgets.BrowserWidget({
+                parentView: null,
+                el: testEl,
+                showPreview: false
+            }).render();
+
+            waitsFor(function () {
+                return $(view.$el).is(':visible');
+            });
+            runs(function () {
+                view.$('#g-root-selector').val('0').trigger('change');
+                expect(view.$('#g-selected-model').length).toBe(0);
+            });
+        });
+
+        it('validation', function () {
+            returnVal = [];
+            view = new girder.views.widgets.BrowserWidget({
+                parentView: null,
+                el: testEl,
+                validate: _.constant('invalid')
+            }).render();
+            waitsFor(function () {
+                return $(view.$el).is(':visible');
+            });
+            runs(function () {
+                view.$('.g-submit-button').click();
+                expect(view.$el.hasClass('in')).toBe(true);
+                expect(view.$('.g-validation-failed-message').text()).toBe('invalid');
+                expect(view.$('.g-validation-falied-message').hasClass('hidden')).toBe(false);
+            });
+        });
+
+        it('render hierarchy', function () {
+            girder.auth.setCurrentUser(new girder.models.UserModel({
+                _id: '0',
+                login: 'johndoe',
+                firstName: 'John',
+                lastName: 'Doe'
+            }));
+
+            var folderModel = new girder.models.FolderModel({
+                _id: '1',
+                name: 'my folder'
             });
 
             returnVal = [];
-            view = new girder.views.BrowserWidget({
+            view = new girder.views.widgets.BrowserWidget({
                 parentView: null,
+                el: testEl,
                 helpText: 'This is helpful',
                 showItems: false,
                 titleText: 'This is a title',
@@ -314,17 +362,131 @@ describe('Test the hierarchy browser modal', function () {
             expect(view.$('.modal-title').text()).toBe('This is a title');
             view.$('#g-root-selector').val('0').trigger('change');
 
-            expect(hwSettings.parentModel).toBe(girder.currentUser);
+            expect(hwSettings.parentModel).toBe(girder.auth.getCurrentUser());
             expect(view.$('g-hierarchy-widget-container').hasClass('hidden')).toBe(false);
-            expect(view.$('#g-selected-model').val()).toBe(girder.currentUser.id);
+            expect(view.$('#g-selected-model').val()).toBe('');
+
+            view._hierarchyView.parentModel = folderModel;
+            view._hierarchyView.trigger('g:setCurrentModel');
+            expect(view.$('#g-selected-model').val()).toBe(folderModel.get('name'));
 
             var ncalls = 0;
-            view.on('g:saved', function (id) {
+            view.on('g:saved', function (model) {
                 ncalls += 1;
-                expect(id).toBe(girder.currentUser.id);
+                expect(model.id).toBe(folderModel.id);
             });
-            view.$('.g-submit-button').click();
-            expect(ncalls).toBe(1);
+
+            waitsFor(function () {
+                return $(view.$el).is(':visible');
+            });
+            runs(function () {
+                view.$('.g-submit-button').click();
+            });
+            waitsFor(function () {
+                return !$(view.$el).is(':visible');
+            });
+            runs(function () {
+                expect(ncalls).toBe(1);
+            });
+        });
+
+        it('item selection', function () {
+            girder.auth.setCurrentUser(new girder.models.UserModel({
+                _id: '0',
+                login: 'johndoe',
+                firstName: 'John',
+                lastName: 'Doe'
+            }));
+
+            returnVal = [];
+            view = new girder.views.widgets.BrowserWidget({
+                parentView: null,
+                el: testEl,
+                helpText: 'This is helpful',
+                titleText: 'This is a title',
+                selectItem: true,
+                root: girder.auth.getCurrentUser(),
+                rootSelectorSettings: {
+                    display: ['Home']
+                }
+            }).render();
+
+            var itemModel = new girder.models.ItemModel({
+                _id: '1',
+                name: 'my item'
+            });
+
+            waitsFor(function () {
+                return $(view.$el).is(':visible');
+            });
+            runs(function () {
+                expect(view.selectedModel()).toBe(null);
+                view.$('#g-root-selector').val('0').trigger('change').trigger('select');
+                hwSettings.onItemClick(itemModel);
+                expect(view.selectedModel().id).toBe('1');
+            });
+        });
+
+        it('input element', function () {
+            var validateCalledWith, validateReturn, submitCalled = false;
+
+            girder.auth.setCurrentUser(new girder.models.UserModel({
+                _id: '0',
+                login: 'johndoe',
+                firstName: 'John',
+                lastName: 'Doe'
+            }));
+
+            returnVal = [];
+            view = new girder.views.widgets.BrowserWidget({
+                parentView: null,
+                el: testEl,
+                helpText: 'This is helpful',
+                titleText: 'This is a title',
+                root: girder.auth.getCurrentUser(),
+                input: {
+                    label: 'label',
+                    default: 'default',
+                    placeholder: 'placeholder',
+                    validate: function (val) {
+                        validateCalledWith = val;
+                        return validateReturn;
+                    }
+                }
+            }).render();
+
+            waitsFor(function () {
+                return $(view.$el).is(':visible');
+            });
+            runs(function () {
+                validateReturn = 'invalid';
+
+                // test form elements
+                expect(view.$('#g-input-element').attr('placeholder')).toBe('placeholder');
+                expect(view.$('#g-input-element').val()).toBe('default');
+                expect(view.$('.g-input-element > label').text()).toBe('label');
+
+                // test an invalid input
+                view.$('#g-input-element').val('input value');
+                view.$('.g-submit-button').click();
+
+                expect(validateCalledWith).toBe('input value');
+                expect(view.$('.g-validation-failed-message').text()).toBe('invalid');
+                expect(view.$('.g-validation-failed-message').hasClass('hidden')).toBe(false);
+
+                // test a valid input
+                view.on('g:saved', function (model, input) {
+                    expect(input).toBe('input value');
+                    submitCalled = true;
+                });
+                validateReturn = undefined;
+                view.$('#g-input-element').val('input value');
+                view.$('.g-submit-button').click();
+            });
+
+            waitsFor(function () {
+                return submitCalled;
+            });
         });
     });
 });

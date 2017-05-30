@@ -184,7 +184,7 @@ class ItemTestCase(base.TestCase):
         Test Create, Read, Update, and Delete of items.
         """
         self.ensureRequiredParams(
-            path='/item', method='POST', required=('name', 'folderId'),
+            path='/item', method='POST', required=('folderId',),
             user=self.users[1])
 
         # Attempt to create an item without write permission, should fail
@@ -352,6 +352,15 @@ class ItemTestCase(base.TestCase):
         self.assertStatusOk(resp)
         item = resp.json
 
+        # Try to delete metadata from an item that doesn't have any set on it
+        # yet.
+        resp = self.request(path='/item/%s/metadata' % (item['_id']),
+                            method='DELETE', user=self.users[0],
+                            body=json.dumps(['foobar']), type='application/json')
+        item = resp.json
+        self.assertStatusOk(resp)
+        self.assertEqual(item['meta'], {})
+
         # Add some metadata
         metadata = {
             'foo': 'bar',
@@ -385,6 +394,51 @@ class ItemTestCase(base.TestCase):
         self.assertEqual(item['meta']['foo'], metadata['foo'])
         self.assertNotHasKeys(item['meta'], ['test'])
 
+        # Test insertion of null values
+        metadata['nullVal'] = None
+        resp = self.request(path='/item/%s/metadata' % item['_id'],
+                            method='PUT', user=self.users[0],
+                            body=json.dumps(metadata), params={'allowNull': True},
+                            type='application/json')
+
+        item = resp.json
+        self.assertEqual(item['meta']['nullVal'], None)
+
+        # Adding an unrelated key should not affect existing keys
+        del metadata['nullVal']
+        metadata['other'] = 'macguffin'
+        resp = self.request(path='/item/%s/metadata' % item['_id'],
+                            method='PUT', user=self.users[0],
+                            body=json.dumps(metadata), type='application/json')
+
+        item = resp.json
+        self.assertEqual(item['meta']['other'], metadata['other'])
+        self.assertEqual(item['meta']['nullVal'], None)
+
+        # Test metadata deletion
+        resp = self.request(path='/item/%s/metadata' % item['_id'],
+                            method='DELETE', user=self.users[0],
+                            body=json.dumps(['other']), type='application/json')
+
+        item = resp.json
+        self.assertNotHasKeys(item['meta'], ['other'])
+
+        # Error when deletion field names contain a period.
+        resp = self.request(path='/item/%s/metadata' % item['_id'],
+                            method='DELETE', user=self.users[0],
+                            body=json.dumps(['foo', 'foo.bar']), type='application/json')
+        self.assertStatus(resp, 400)
+        self.assertEqual(
+            resp.json['message'], 'Invalid key foo.bar: keys must not contain the "." character.')
+
+        # Error when deletion field names begin with a dollar-sign.
+        resp = self.request(path='/item/%s/metadata' % item['_id'],
+                            method='DELETE', user=self.users[0],
+                            body=json.dumps(['foo', '$bar']), type='application/json')
+        self.assertStatus(resp, 400)
+        self.assertEqual(
+            resp.json['message'], 'Invalid key $bar: keys must not start with the "$" character.')
+
         # Make sure metadata cannot be added with invalid JSON
         metadata = {
             'test': 'allowed'
@@ -406,9 +460,8 @@ class ItemTestCase(base.TestCase):
                             method='PUT', user=self.users[0],
                             body=json.dumps(metadata), type='application/json')
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'],
-                         'The key name foo.bar must not contain a period' +
-                         ' or begin with a dollar sign.')
+        self.assertEqual(
+            resp.json['message'], 'Invalid key foo.bar: keys must not contain the "." character.')
 
         # Make sure metadata cannot be added if the key begins with a
         # dollar sign
@@ -419,9 +472,9 @@ class ItemTestCase(base.TestCase):
                             method='PUT', user=self.users[0],
                             body=json.dumps(metadata), type='application/json')
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'],
-                         'The key name $foobar must not contain a period' +
-                         ' or begin with a dollar sign.')
+        self.assertEqual(
+            resp.json['message'],
+            'Invalid key $foobar: keys must not start with the "$" character.')
 
         # Make sure metadata cannot be added with a blank key
         metadata = {
@@ -431,8 +484,8 @@ class ItemTestCase(base.TestCase):
                             method='PUT', user=self.users[0],
                             body=json.dumps(metadata), type='application/json')
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'],
-                         'Key names must be at least one character long.')
+        self.assertEqual(
+            resp.json['message'], 'Key names must not be empty.')
 
     def testItemFiltering(self):
         """
@@ -454,7 +507,7 @@ class ItemTestCase(base.TestCase):
 
         # set a private property
         item['private'] = 'very secret metadata'
-        self.model('item').save(item)
+        item = self.model('item').save(item)
 
         # get the item from the rest api
         resp = self.request(path='/item/%s' % str(item['_id']), method='GET',
@@ -512,7 +565,7 @@ class ItemTestCase(base.TestCase):
         # Force the item to be saved without lowerName and baseParentType fields
         del item['lowerName']
         del item['baseParentType']
-        self.model('item').save(item, validate=False)
+        item = self.model('item').save(item, validate=False)
 
         item = self.model('item').find({'_id': item['_id']})[0]
         self.assertNotHasKeys(item, ('lowerName', 'baseParentType'))
@@ -537,7 +590,7 @@ class ItemTestCase(base.TestCase):
         # corrected.
         item['description'] = 1
         del item['lowerName']
-        self.model('item').save(item, validate=False)
+        item = self.model('item').save(item, validate=False)
         item = self.model('item').find({'_id': item['_id']})[0]
         self.assertNotHasKeys(item, ('lowerName', ))
         self.model('item').load(item['_id'], force=True)
@@ -571,9 +624,10 @@ class ItemTestCase(base.TestCase):
             'foo': 'value1',
             'test': 2
         }
-        self.request(path='/item/%s/metadata' % origItem['_id'],
-                     method='PUT', user=self.users[0],
-                     body=json.dumps(metadata), type='application/json')
+        resp = self.request(
+            path='/item/%s/metadata' % origItem['_id'], method='PUT', user=self.users[0],
+            body=json.dumps(metadata), type='application/json')
+        self.assertStatusOk(resp)
         self._testUploadFileToItem(origItem, 'file_1', self.users[0], 'foobar')
         self._testUploadFileToItem(origItem, 'file_2', self.users[0], 'foobz')
         # Also upload a link
@@ -672,3 +726,19 @@ class ItemTestCase(base.TestCase):
         resp = self.request(path='/item/%s/download' % item['_id'],
                             cookie='girderToken=invalid_token')
         self.assertStatus(resp, 401)
+
+    def testReuseExisting(self):
+        item1 = self.model('item').createItem(
+            'to be reused', creator=self.users[0], folder=self.publicFolder)
+
+        item2 = self.model('item').createItem(
+            'to be reused', creator=self.users[0], folder=self.publicFolder)
+
+        item3 = self.model('item').createItem(
+            'to be reused', creator=self.users[0], folder=self.publicFolder,
+            reuseExisting=True)
+
+        self.assertNotEqual(item1['_id'], item2['_id'])
+        self.assertEqual(item1['_id'], item3['_id'])
+        self.assertEqual(item2['name'], 'to be reused (1)')
+        self.assertEqual(item3['name'], 'to be reused')

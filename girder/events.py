@@ -42,11 +42,11 @@ receive the Event object as its only argument.
 """
 
 import contextlib
-import threading
-import types
-
-from .constants import TerminalColor
 import girder
+import threading
+
+
+from girder.utility import config
 from six.moves import queue
 
 
@@ -107,6 +107,27 @@ class Event(object):
         :param response: The response value, which can be any type.
         """
         self.responses.append(response)
+        return self
+
+
+class ForegroundEventsDaemon(object):
+    """
+    This is the implementation used for ``girder.events.daemon`` if the
+    config file chooses to disable using the background thread for the daemon.
+    It executes all bound handlers in the current thread, and provides
+    no-op start() and stop() implementations to remain compatible with the
+    API of AsyncEventsThread.
+    """
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def trigger(self, eventName, info=None, callback=None):
+        event = trigger(eventName, info, async=False, daemon=True)
+        if callable(callback):
+            callback(event)
 
 
 class AsyncEventsThread(threading.Thread):
@@ -117,6 +138,7 @@ class AsyncEventsThread(threading.Thread):
     """
     def __init__(self):
         threading.Thread.__init__(self)
+
         self.daemon = True
         self.terminate = False
         self.eventQueue = queue.Queue()
@@ -127,20 +149,19 @@ class AsyncEventsThread(threading.Thread):
         put to sleep until someone calls trigger() on it with a new event to
         dispatch.
         """
-        print(TerminalColor.info('Started asynchronous event manager thread.'))
+        girder.logprint.info('Started asynchronous event manager thread.')
 
         while not self.terminate:
             eventName, info, callback = self.eventQueue.get(block=True)
             try:
-                event = trigger(eventName, info, async=True)
-                if isinstance(callback, types.FunctionType):
+                event = trigger(eventName, info, async=True, daemon=True)
+                if callable(callback):
                     callback(event)
             except Exception:
-                girder.logger.exception(
-                    'In handler for event "%s":' % eventName)
-                pass  # Must continue the event loop even if handler failed
+                # Must continue the event loop even if handler failed
+                girder.logger.exception('In handler for event "%s":' % eventName)
 
-        print(TerminalColor.info('Stopped asynchronous event manager thread.'))
+        girder.logprint.info('Stopped asynchronous event manager thread.')
 
     def trigger(self, eventName, info=None, callback=None):
         """
@@ -148,6 +169,9 @@ class AsyncEventsThread(threading.Thread):
 
         :param eventName: The event name to pass to the girder.events.trigger
         :param info: The info object to pass to girder.events.trigger
+        :param callback: Optional callable to be called upon completion of
+            all bound event handlers. It takes one argument, which is the
+            event object itself.
         """
         self.eventQueue.put((eventName, info, callback))
 
@@ -233,7 +257,7 @@ def bound(eventName, handlerName, handler):
         unbind(eventName, handlerName)
 
 
-def trigger(eventName, info=None, pre=None, async=False):
+def trigger(eventName, info=None, pre=None, async=False, daemon=False):
     """
     Fire an event with the given name. All listeners bound on that name will be
     called until they are exhausted or one of the handlers calls the
@@ -248,12 +272,18 @@ def trigger(eventName, info=None, pre=None, async=False):
         "info" key (the info arg to this function), and "eventName" and
         "handlerName" values.
     :type pre: function or None
-    :param async: Whether this event is executing on the background daemon
+    :param async: Whether this event is executing on the background thread
         (True) or on the request thread (False).
     :type async: bool
+    :param daemon: Whether this was triggered via ``girder.events.daemon``.
+    :type daemon: bool
     """
     e = Event(eventName, info, async=async)
     for handler in _mapping.get(eventName, ()):
+        if daemon and not async:
+            girder.logprint.warning(
+                'WARNING: Handler "%s" for event "%s" was triggered on the daemon, but is '
+                'actually running synchronously.' % (handler['name'], eventName))
         e.currentHandlerName = handler['name']
         if pre is not None:
             pre(info=info, handler=handler['handler'], eventName=eventName,
@@ -266,10 +296,10 @@ def trigger(eventName, info=None, pre=None, async=False):
     return e
 
 
-_deprecated = {
-    'assetstore.adapter.get':
-        'use girder.utility.assetstore_utilities.setAssetstoreAdapter instead'
-}
-
+_deprecated = {}
 _mapping = {}
-daemon = AsyncEventsThread()
+
+if config.getConfig()['server'].get('disable_event_daemon', False):
+    daemon = ForegroundEventsDaemon()
+else:
+    daemon = AsyncEventsThread()

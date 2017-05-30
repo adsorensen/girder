@@ -17,6 +17,7 @@
 #  limitations under the License.
 ###############################################################################
 
+import cherrypy
 import datetime
 import dateutil.parser
 import errno
@@ -26,7 +27,7 @@ import pytz
 import re
 import string
 
-from girder.constants import TerminalColor
+import girder
 import girder.events
 
 try:
@@ -34,8 +35,8 @@ try:
     random = SystemRandom()
     random.random()  # potentially raises NotImplementedError
 except NotImplementedError:  # pragma: no cover
-    print(TerminalColor.warning(
-        'WARNING: using non-cryptographically secure PRNG.'))
+    girder.logprint.warning(
+        'WARNING: using non-cryptographically secure PRNG.')
     import random
 
 
@@ -63,7 +64,7 @@ def genToken(length=64):
     Use this utility function to generate a random string of a desired length.
     """
     return ''.join(random.choice(string.ascii_letters + string.digits)
-                   for x in range(length))
+                   for _ in range(length))
 
 
 def camelcase(value):
@@ -102,6 +103,30 @@ def mkdir(path, mode=0o777, recurse=True, existOk=True):
             raise
 
 
+def toBool(val):
+    """
+    Coerce a string value to a bool. Meant to be used to parse HTTP
+    parameters, which are always sent as strings. The following string
+    values will be interpreted as True:
+
+      - ``'true'``
+      - ``'on'``
+      - ``'1'``
+      - ``'yes'``
+
+    All other strings will be interpreted as False. If the given param
+    is not passed at all, returns the value specified by the default arg.
+    This function is case-insensitive.
+
+    :param val: The value to coerce to a bool.
+    :type val: str
+    """
+    if isinstance(val, bool):
+        return val
+
+    return val.lower().strip() in ('true', 'on', '1', 'yes')
+
+
 class JsonEncoder(json.JSONEncoder):
     """
     This extends the standard json.JSONEncoder to allow for more types to be
@@ -118,3 +143,29 @@ class JsonEncoder(json.JSONEncoder):
         elif isinstance(obj, datetime.datetime):
             return obj.replace(tzinfo=pytz.UTC).isoformat()
         return str(obj)
+
+
+class RequestBodyStream(object):
+    """
+    Wraps a cherrypy request body into a more abstract file-like object.
+    """
+    def __init__(self, stream, size=None):
+        self.stream = stream
+        self.size = size
+
+    def read(self, *args, **kwargs):
+        return self.stream.read(*args, **kwargs)
+
+    def close(self, *args, **kwargs):
+        pass
+
+    def getSize(self):
+        """
+        Returns the size of the body data wrapped by this class. For
+        multipart encoding, this is the size of the part. For sending
+        as the body, this is the Content-Length header.
+        """
+        if self.size is not None:
+            return self.size
+
+        return int(cherrypy.request.headers['Content-Length'])

@@ -19,10 +19,12 @@
 
 import cherrypy
 import datetime
+import six
 
 from .model_base import Model, ValidationException
 from girder import events
 from girder.constants import AccessType, CoreEventHandler
+from girder.models.model_base import AccessControlledModel
 from girder.utility import assetstore_utilities, acl_mixin
 
 
@@ -60,9 +62,7 @@ class File(acl_mixin.AccessControlMixin, Model):
             updating its size.
         """
         if file.get('assetstoreId'):
-            assetstore = self.model('assetstore').load(file['assetstoreId'])
-            adapter = assetstore_utilities.getAssetstoreAdapter(assetstore)
-            adapter.deleteFile(file)
+            self.getAssetstoreAdapter(file).deleteFile(file)
 
         if file['itemId']:
             item = self.model('item').load(file['itemId'], force=True)
@@ -94,9 +94,7 @@ class File(acl_mixin.AccessControlMixin, Model):
         :type extraParameters: str or None
         """
         if file.get('assetstoreId'):
-            assetstore = self.model('assetstore').load(file['assetstoreId'])
-            adapter = assetstore_utilities.getAssetstoreAdapter(assetstore)
-            return adapter.downloadFile(
+            return self.getAssetstoreAdapter(file).downloadFile(
                 file, offset=offset, headers=headers, endByte=endByte,
                 contentDisposition=contentDisposition,
                 extraParameters=extraParameters)
@@ -104,8 +102,10 @@ class File(acl_mixin.AccessControlMixin, Model):
             if headers:
                 raise cherrypy.HTTPRedirect(file['linkUrl'])
             else:
+                endByte = endByte or len(file['linkUrl'])
+
                 def stream():
-                    yield file['linkUrl']
+                    yield file['linkUrl'][offset:endByte]
                 return stream
         else:  # pragma: no cover
             raise Exception('File has no known download mechanism.')
@@ -125,11 +125,11 @@ class File(acl_mixin.AccessControlMixin, Model):
         if 'name' not in doc or not doc['name']:
             raise ValidationException('File name must not be empty.', 'name')
 
-        doc['exts'] = doc['name'].split('.')[1:]
+        doc['exts'] = [ext.lower() for ext in doc['name'].split('.')[1:]]
 
         return doc
 
-    def createLinkFile(self, name, parent, parentType, url, creator):
+    def createLinkFile(self, name, parent, parentType, url, creator, size=None, mimeType=None):
         """
         Create a file that is a link to a URL, rather than something we maintain
         in an assetstore.
@@ -137,12 +137,16 @@ class File(acl_mixin.AccessControlMixin, Model):
         :param name: The local name for the file.
         :type name: str
         :param parent: The parent object for this file.
-        :type parent: folder or item
+        :type parent: girder.models.folder or girder.models.item
         :param parentType: The parent type (folder or item)
         :type parentType: str
         :param url: The URL that this file points to
         :param creator: The user creating the file.
         :type creator: dict
+        :param size: The size of the file in bytes. (optional)
+        :type size: int
+        :param mimeType: The mimeType of the file. (optional)
+        :type mimeType: str
         """
         if parentType == 'folder':
             # Create a new item with the name of the file.
@@ -157,8 +161,12 @@ class File(acl_mixin.AccessControlMixin, Model):
             'creatorId': creator['_id'],
             'assetstoreId': None,
             'name': name,
+            'mimeType': mimeType,
             'linkUrl': url
         }
+
+        if size is not None:
+            file['size'] = int(size)
 
         try:
             file = self.save(file)
@@ -272,11 +280,16 @@ class File(acl_mixin.AccessControlMixin, Model):
         file = self.save(file)
 
         if file.get('assetstoreId'):
-            assetstore = self.model('assetstore').load(file['assetstoreId'])
-            adapter = assetstore_utilities.getAssetstoreAdapter(assetstore)
-            adapter.fileUpdated(file)
+            self.getAssetstoreAdapter(file).fileUpdated(file)
 
         return file
+
+    def getAssetstoreAdapter(self, file):
+        """
+        Return the assetstore adapter for the given file.
+        """
+        assetstore = self.model('assetstore').load(file['assetstoreId'])
+        return assetstore_utilities.getAssetstoreAdapter(assetstore)
 
     def copyFile(self, srcFile, creator, item=None):
         """
@@ -299,30 +312,40 @@ class File(acl_mixin.AccessControlMixin, Model):
         if item:
             file['itemId'] = item['_id']
         if file.get('assetstoreId'):
-            assetstore = self.model('assetstore').load(file['assetstoreId'])
-            adapter = assetstore_utilities.getAssetstoreAdapter(assetstore)
-            adapter.copyFile(srcFile, file)
+            self.getAssetstoreAdapter(file).copyFile(srcFile, file)
         elif file.get('linkUrl'):
             file['linkUrl'] = srcFile['linkUrl']
 
         return self.save(file)
 
-    def isOrphan(self, file, user=None):
+    def isOrphan(self, file):
         """
         Returns True if this file is orphaned (its item or attached entity is
         missing).
 
         :param file: The file to check.
         :type file: dict
-        :param user: The user for permissions.
-        :type user: dict or None
         """
         if file.get('attachedToId'):
-            return not self.model(file.get('attachedToType')).load(
-                file.get('attachedToId'), user=user)
+            attachedToType = file.get('attachedToType')
+            if isinstance(attachedToType, six.string_types):
+                modelType = self.model(attachedToType)
+            elif isinstance(attachedToType, list) and len(attachedToType) == 2:
+                modelType = self.model(*attachedToType)
+            else:
+                # Invalid 'attachedToType'
+                return True
+            if isinstance(modelType, (acl_mixin.AccessControlMixin,
+                                      AccessControlledModel)):
+                attachedDoc = modelType.load(
+                    file.get('attachedToId'), force=True)
+            else:
+                attachedDoc = modelType.load(
+                    file.get('attachedToId'))
         else:
-            return not self.model('item').load(
-                file.get('itemId'), user=user)
+            attachedDoc = self.model('item').load(
+                file.get('itemId'), force=True)
+        return not attachedDoc
 
     def updateSize(self, file):
         """
@@ -334,3 +357,26 @@ class File(acl_mixin.AccessControlMixin, Model):
         """
         # TODO: check underlying assetstore for size?
         return file.get('size', 0), 0
+
+    def open(self, file):
+        """
+        Use this to expose a Girder file as a python file-like object. At the
+        moment, this is a read-only interface, the equivalent of opening a
+        system file with ``'rb'`` mode. This can also be used as a context
+        manager, e.g.:
+
+        >>> with self.model('file').open(file) as fh:
+        >>>    while True:
+        >>>        chunk = fh.read(CHUNK_LEN)
+        >>>        if not chunk:
+        >>>            break
+
+        Using it this way will automatically close the file handle for you when
+        the ``with`` block is left.
+
+        :param file: A Girder file document.
+        :type file: dict
+        :return: A file-like object containing the bytes of the file.
+        :rtype: girder.utility.abstract_assetstore_adapter.FileHandle
+        """
+        return self.getAssetstoreAdapter(file).open(file)

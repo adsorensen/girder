@@ -49,7 +49,7 @@ def _computeSlowStatus(process, status, db):
     status['diskPartitions'] = [_objectToDict(part) for part in
                                 psutil.disk_partitions()]
     try:
-        # This fails in travis's environment, so guard it
+        # This fails in certain environments, so guard it
         status['diskIO'] = _objectToDict(psutil.disk_io_counters())
     except Exception:
         pass
@@ -124,7 +124,7 @@ def getStatus(mode='basic', user=None):
                  than basic mode.
     :returns: a status dictionary.
     """
-    isAdmin = (user is not None and user.get('admin', False) is True)
+    isAdmin = (user is not None and user['admin'])
 
     status = {}
     status['bootTime'] = psutil.boot_time()

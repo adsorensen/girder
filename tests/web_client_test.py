@@ -27,7 +27,7 @@ from girder import config
 from girder.api import access
 from girder.api.describe import Description, describeRoute
 from girder.api.rest import Resource, RestException
-from girder.constants import ROOT_DIR
+from girder.constants import registerAccessFlag, ROOT_DIR
 from girder.utility.progress import ProgressContext
 from . import base
 from six.moves import range
@@ -43,11 +43,10 @@ def setUpModule():
     if 's3' in os.environ['ASSETSTORE_TYPE']:
         mockS3 = True
 
-    pluginDirs = os.environ.get('PLUGIN_DIRS', '')
+    pluginDir = os.environ.get('PLUGIN_DIR', '')
 
-    if pluginDirs:
-        curConfig = config.getConfig()
-        curConfig['plugins'] = {'plugin_directory': pluginDirs}
+    if pluginDir:
+        base.mockPluginDir(pluginDir)
 
     plugins = os.environ.get('ENABLED_PLUGINS', '')
     if plugins:
@@ -65,6 +64,7 @@ class WebClientTestEndpoints(Resource):
         self.route('GET', ('progress', ), self.testProgress)
         self.route('PUT', ('progress', 'stop'), self.testProgressStop)
         self.route('POST', ('file', ), self.uploadFile)
+        self.route('POST', ('access_flag', ), self.registerAccessFlags)
         self.stop = False
 
     @access.token
@@ -74,14 +74,21 @@ class WebClientTestEndpoints(Resource):
                '"failure".', required=False)
         .param('duration', 'Duration of the test in seconds', required=False,
                dataType='int')
+        .param('resourceId', 'Resource ID associated with the progress notification.',
+               required=False)
+        .param('resourceName', 'Type of resource associated with the progress '
+               'notification.', required=False)
     )
     def testProgress(self, params):
         test = params.get('test', 'success')
         duration = int(params.get('duration', 10))
+        resourceId = params.get('resourceId', None)
+        resourceName = params.get('resourceName', None)
         startTime = time.time()
         with ProgressContext(True, user=self.getCurrentUser(),
                              title='Progress Test', message='Progress Message',
-                             total=duration) as ctx:
+                             total=duration, resource={'_id': resourceId},
+                             resourceName=resourceName) as ctx:
             for current in range(duration):
                 if self.stop:
                     break
@@ -123,6 +130,17 @@ class WebClientTestEndpoints(Resource):
 
         return file
 
+    @access.public
+    @describeRoute(None)
+    def registerAccessFlags(self, params):
+        """
+        Helper that can be used to register access flags in the system. This is
+        used to test the access flags UI since the core does not expose any flags.
+        """
+        flags = self.getBodyJson()
+        for key, info in six.viewitems(flags):
+            registerAccessFlag(key, info['name'], info['description'], info['admin'])
+
 
 class WebClientTestCase(base.TestCase):
     def setUp(self):
@@ -140,14 +158,19 @@ class WebClientTestCase(base.TestCase):
 
         testServer.root.api.v1.webclienttest = WebClientTestEndpoints()
 
+        if 'SETUP_MODULES' in os.environ:
+            import imp
+            for i, script in enumerate(os.environ['SETUP_MODULES'].split(':')):
+                imp.load_source('girder.web_test_setup%d' % i, script)
+
     def testWebClientSpec(self):
-        baseUrl = '/static/built/testEnv.html'
+        baseUrl = '/static/built/testing/testEnv.html'
         if os.environ.get('BASEURL', ''):
             baseUrl = os.environ['BASEURL']
 
         cmd = (
             os.path.join(
-                ROOT_DIR, 'node_modules', 'phantomjs', 'bin', 'phantomjs'),
+                ROOT_DIR, 'node_modules', '.bin', 'phantomjs'),
             '--web-security=%s' % self.webSecurity,
             os.path.join(ROOT_DIR, 'clients', 'web', 'test', 'specRunner.js'),
             'http://localhost:%s%s' % (os.environ['GIRDER_PORT'], baseUrl),
@@ -159,11 +182,11 @@ class WebClientTestCase(base.TestCase):
         # phantomjs occasionally fails to load javascript files.  This appears
         # to be a known issue: https://github.com/ariya/phantomjs/issues/10652.
         # Retry several times if it looks like this has occurred.
-        for tries in range(5):
+        retry_count = os.environ.get('PHANTOMJS_RETRY', 3)
+        for tries in range(int(retry_count)):
             retry = False
             task = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT)
-            hasJasmine = False
             jasmineFinished = False
             for line in iter(task.stdout.readline, b''):
                 if isinstance(line, six.binary_type):
@@ -178,17 +201,16 @@ class WebClientTestCase(base.TestCase):
                     open('phantom_temp_%s.tmp' % os.environ['GIRDER_PORT'],
                          'wb').write(msg.get_payload(decode=True))
                     continue  # we don't want to print this
-                if 'Jasmine' in line:
-                    hasJasmine = True
                 if 'Testing Finished' in line:
                     jasmineFinished = True
-                sys.stdout.write(line)
+                try:
+                    sys.stdout.write(line)
+                except UnicodeEncodeError:
+                    sys.stdout.write(repr(line))
                 sys.stdout.flush()
             returncode = task.wait()
-            if not retry and hasJasmine and jasmineFinished:
+            if not retry and jasmineFinished:
                 break
-            if not hasJasmine:
-                time.sleep(1)
             sys.stderr.write('Retrying test\n')
             # If we are retrying, we need to reset the whole test, as the
             # databases and other resources are in an unknown state

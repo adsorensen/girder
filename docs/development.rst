@@ -10,40 +10,21 @@ the tools used to develop Girder.
 Configuring Your Development Environment
 ----------------------------------------
 
-In order to develop Girder, you should first refer to the :doc:`prerequisites`
-and :doc:`installation` sections to setup a basic local environment.
+In order to develop Girder, you should first refer to :doc:`prerequisites <prerequisites>`, `virtual environment <installation.html#creating-a-virtual-environment>`__, `install from Git <installation.html#install-from-git-repository>`__, and `run <installation.html#run>`__ sections to setup a basic local development environment.
 
-Next, you should install the Python development dependencies, to
+Next, you should install the Python development dependencies with pip, to
 provide helpful development tools and to allow the test suite to run: ::
 
     pip install -r requirements-dev.txt
 
-During development, once Girder is started via ``python -m girder``, the server
-will reload itself whenever a Python file is modified.
+Install front-end web client development dependencies. This will install npm modules eslint and pug-lint, which are needed to run unit tests. This will also build the web client code: ::
 
-Girder's web-based client application is built using the `Grunt <http://gruntjs.com/>`_
-task running tool. When you run the ``npm install`` command during Girder's
-installation, it will run all of the grunt tasks required to build the web client.
-Grunt tasks are run with the ``grunt`` executable, which is installed under your Girder source
-directory in the ``./node_modules/.bin/`` directory. You could conveniently update the
-``PATH`` by running ``export PATH=$(pwd)/node_modules/.bin:$PATH`` -- once you do that,
-you can just type ``grunt`` in your shell to run tasks.
+    girder-install web --dev
 
-.. note :: Alternatively, you could install the grunt command line interface globally so
-   that the ``grunt`` command is automatically added to your ``PATH``. If you want to do
-   that, run ``npm install -g grunt-cli``. Note that this command requires ``sudo`` on many
-   systems.
+For more options for building the web client, run: ::
 
-It is recommended during development to make use of the ``grunt-watch`` tool. Running
-``grunt watch`` in the root of the repository will watch for JavaScript, Stylus, and
-Jade changes in order to rebuild them on-the-fly. If you do not run ``grunt watch``
-while making code changes, you will need to run the ``grunt`` command to manually
-rebuild the web client in order to see your changes reflected.
+    girder-install web --help
 
-Note that some browser debugging tools do not play well with local variable
-mangling in JavaScript. If you want to use such a debugger and need to work around this,
-run ``grunt`` or ``grunt watch`` with the additional argument ``--debug-js``.
-This will prevent name mangling in the minified output.
 
 Vagrant
 ^^^^^^^
@@ -53,10 +34,35 @@ A shortcut to going through the installation steps for development is to use
 `VirtualBox <https://www.virtualbox.org>`_ virtual machine. To setup this
 environment run ``vagrant up`` in the root of the repository. This will spin up
 and provision a virtual machine, provided you have Vagrant and VirtualBox
-installed. Once this process is complete, you can run ``vagrant ssh`` in order
-to start Girder. There is a helper script in the Vagrant home directory that
-will start Girder in a detached screen session. You may want to run a similar
-process to run ``grunt watch`` as detailed above.
+installed. Vagrant uses `Ansible <https://ansible.com>`_ for provisioning Girder and its various
+dependencies.
+
+.. seealso::
+
+   For more information on provisioning Girder, see :doc:`provisioning`.
+
+
+During Development
+------------------
+
+Once Girder is started via ``girder-server``, the server
+will reload itself whenever a Python file is modified.
+
+If you are doing front-end development, it's much faster to use a *watch* process to perform
+automatic fast rebuilds of your code whenever you make changes to source files. 
+
+If you are making changes to Girder's core web client, run the following watch command: ::
+
+    girder-install web --watch
+
+If you are developing a web client of a plugin, run: ::
+
+    girder-install web --watch-plugin your_plugin_name
+
+With ``watch`` option, *sourcemaps* will be generated, which helps debugging front-end code in browser.
+When you want to end the watch process, press Ctrl+C (or however you would normally terminate a
+process in your terminal).
+
 
 Utilities
 ---------
@@ -163,9 +169,13 @@ tests, just: ::
     cd girder-build
     ctest
 
-There are many ways to filter tests when running CTest, or run the tests in
-parallel. More information about CTest can be found
-`here <http://www.cmake.org/cmake/help/v3.0/manual/ctest.1.html>`_.
+There are many ways to filter tests when running CTest or run the tests in
+parallel. For example, this command will run tests with name matches regex **server_user** with verbose output. 
+More information about CTest can be found
+`here <http://www.cmake.org/cmake/help/v3.0/manual/ctest.1.html>`_. ::
+
+    ctest -V -R server_user
+
 
 If you run into errors on any of the packaging tests, two possible fixes are
 
@@ -188,13 +198,16 @@ Client Side Testing
 -------------------
 
 Using the same setup as above for the Server Side Tests, your environment will be set up
-to run client side tests. Running ::
+The client side tests and server side tests are both harnessed with CTest, so use the following commands to run both ::
 
     cd girder-build
     ctest
 
 will run all of the tests, which include the client side tests.  Our client tests use the
 Jasmine JS testing framework.
+
+If you encounter errors regarding ESLINT or PUG_LINT, there is a chance you missed certain steps for setting up development dependencies.
+You could use ``ccmake`` to change ``CMake`` configuration. Or, it might be easier to recreate the environment from the beginning.
 
 When running client side tests, if you try to SIGINT (ctrl+c) the CTest process, CTest
 won't pass that signal down to the test processes for them to handle.  This can result
@@ -232,11 +245,58 @@ You will find many useful methods for client side testing in the ``girderTest`` 
 defined at ``/clients/web/test/testUtils.js``.
 
 
+Ansible Testing
+---------------
+
+Girder provides infrastructure for using Ansible to provision machines to run and configure Girder and its various plugins. Vagrant is used to create development environments and spin up virtual machines as a means of testing the Ansible provisioning infrastructure.
+
+.. seealso::
+
+   Details for usage of our provisioning infrastructure can be found on :doc:`provisioning`.
+
+Girder's Ansible infrastructure can be thought of as 2 components:
+ 1. The Girder Ansible Role (the ``girder_ansible`` CTest label)
+
+    This is primarily responsible for *deploying* Girder
+
+ 2. The Girder Ansible Client (the ``girder_ansible_client`` CTest label)
+
+    This is primarily responsible for *configuring* Girder through its REST API.
+
+
+Testing the Ansible Role
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The Ansible role is tested simply by starting and provisioning a virtual machine with Vagrant and ensuring it returns a zero exit code.
+
+The tests for these by default are running Vagrant with each of the Ansible playbooks in ``devops/ansible/examples``.
+
+To test these one can run CMake with the ``ANSIBLE_TESTS`` option enabled, and test only the correct CTest label ::
+
+  cmake -D ANSIBLE_TESTS=ON /path/to/girder
+  ctest -L girder_ansible
+
+.. note:: Since these tests require creating and provisioning several virtual machines, they take a long time to run which is why they're disabled by default.
+
+
+Testing the Ansible Client
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The Ansible client is tested by provisioning a single Girder virtual machine and running Ansible playbooks against it.
+
+To test these one can run CMake with the ``ANSIBLE_CLIENT_TESTS`` option enabled, and test only the correct CTest label ::
+
+  cmake -D ANSIBLE_CLIENT_TESTS=ON /path/to/girder
+  ctest -L girder_ansible_client
+
+.. note:: Due to how dependencies are handled in CMake, it's currently not possible to individually run an Ansible Client test without also running the test that starts the virtual machine.
+
+
 Code Review
 -----------
 
 Contributions to Girder are done via pull requests with a core developer
-accepting a PR by saying it "Looks good to me" or LGTM. At this point, the
+approving the PR with GitHub review system. At this point, the
 topic branch can be merged to master. This is meant to be a simple,
 low-friction process; however, code review is very important. It should be done
 carefully and not taken lightly. Thorough code review is a crucial part of
@@ -299,7 +359,7 @@ recommended process for generating a new release is described here.
     (Packaging in an old directory could cause files and plugins to be
     mistakenly included.)
 
-4.  Run ``npm install && grunt package``.  This will generate the source
+4.  Run ``python setup.py sdist --dist-dir=.``.  This will generate the source
     distribution tarball with a name like ``girder-<version>.tar.gz``.
 
 5.  Create a new virtual environment and install the python package into
@@ -328,14 +388,20 @@ recommended process for generating a new release is described here.
 
         python setup.py sdist upload
 
+.. _releasepythonclientpackage:
+
 Releasing the python client package
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Whenever the main Girder package is released, the python client package should also
-be versioned and released if is has changed since the last Girder release or the last
-time it was released. Normal semantic versioning is not in use for the python client
-package because its version is partially dependent on the Girder server package
-version. The rules for versioning the python client package are as follows:
+The design intent behind the python client package is to work with as many
+versions of the Girder server as possible; think carefully before breaking this
+compatibility. There isn't a formal rule for releasing versions of the python
+client package, releases tend to be made when a significant change is made to
+the client that people want to use in production.
+
+Normal semantic versioning is not in use for the python client package because
+its version is partially dependent on the Girder server package version. The
+rules for versioning the python client package are as follows:
 
 * The major version of the python client should be the same as the major version
   of the Girder server package, assuming it is compatible with the server API.

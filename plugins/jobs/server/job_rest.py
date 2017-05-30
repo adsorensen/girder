@@ -17,66 +17,81 @@
 #  limitations under the License.
 ###############################################################################
 
-from girder import events
 from girder.api import access
-from girder.api.describe import Description, describeRoute
-from girder.api.rest import Resource, filtermodel, loadmodel
+from girder.api.describe import Description, autoDescribeRoute
+from girder.api.rest import Resource, filtermodel
 from girder.constants import AccessType, SortDir
 
 
 class Job(Resource):
+
     def __init__(self):
         super(Job, self).__init__()
         self.resourceName = 'job'
 
         self.route('GET', (), self.listJobs)
+        self.route('GET', ('all',), self.listAllJobs)
         self.route('GET', (':id',), self.getJob)
         self.route('PUT', (':id',), self.updateJob)
         self.route('DELETE', (':id',), self.deleteJob)
+        self.route('GET', ('typeandstatus', 'all',), self.allJobsTypesAndStatuses)
+        self.route('GET', ('typeandstatus',), self.jobsTypesAndStatuses)
 
     @access.public
     @filtermodel(model='job', plugin='jobs')
-    @describeRoute(
+    @autoDescribeRoute(
         Description('List jobs for a given user.')
         .param('userId', 'The ID of the user whose jobs will be listed. If '
                'not passed or empty, will use the currently logged in user. If '
                'set to "None", will list all jobs that do not have an owning '
                'user.', required=False)
+        .jsonParam('types', 'Filter for type', requireArray=True, required=False)
+        .jsonParam('statuses', 'Filter for status', requireArray=True, required=False)
         .pagingParams(defaultSort='created', defaultSortDir=SortDir.DESCENDING)
     )
-    def listJobs(self, params):
-        limit, offset, sort = self.getPagingParameters(
-            params, 'created', SortDir.DESCENDING)
+    def listJobs(self, userId, types, statuses, limit, offset, sort, params):
         currentUser = self.getCurrentUser()
-        userId = params.get('userId')
         if not userId:
             user = currentUser
         elif userId.lower() == 'none':
-            user = None
+            user = 'none'
         else:
             user = self.model('user').load(
-                params['userId'], user=currentUser, level=AccessType.READ)
+                userId, user=currentUser, level=AccessType.READ)
 
         return list(self.model('job', 'jobs').list(
-            user=user, offset=offset, limit=limit, sort=sort,
-            currentUser=currentUser))
+            user=user, offset=offset, limit=limit, types=types,
+            statuses=statuses, sort=sort, currentUser=currentUser))
+
+    @access.admin
+    @filtermodel(model='job', plugin='jobs')
+    @autoDescribeRoute(
+        Description('List all jobs.')
+        .jsonParam('types', 'Filter for type', requireArray=True, required=False)
+        .jsonParam('statuses', 'Filter for status', requireArray=True, required=False)
+        .pagingParams(defaultSort='created', defaultSortDir=SortDir.DESCENDING)
+    )
+    def listAllJobs(self, types, statuses, limit, offset, sort, params):
+        currentUser = self.getCurrentUser()
+        return list(self.model('job', 'jobs').list(
+            user='all', offset=offset, limit=limit, types=types,
+            statuses=statuses, sort=sort, currentUser=currentUser))
 
     @access.public
-    @loadmodel(model='job', plugin='jobs', level=AccessType.READ)
-    @describeRoute(
+    @filtermodel(model='job', plugin='jobs')
+    @autoDescribeRoute(
         Description('Get a job by ID.')
-        .param('id', 'The ID of the job.', paramType='path')
+        .modelParam('id', 'The ID of the job.', model='job', plugin='jobs', level=AccessType.READ,
+                    includeLog=True)
         .errorResponse('ID was invalid.')
         .errorResponse('Read access was denied for the job.', 403)
     )
-    @filtermodel(model='job', plugin='jobs')
     def getJob(self, job, params):
         return job
 
     @access.token
-    @loadmodel(model='job', plugin='jobs', force=True)
     @filtermodel(model='job', plugin='jobs')
-    @describeRoute(
+    @autoDescribeRoute(
         Description('Update an existing job.')
         .notes('In most cases, regular users should not call this endpoint. It '
                'will typically be used by a batch processing system to send '
@@ -84,59 +99,61 @@ class Job(Resource):
                'user-associated token for authorization, the token must be '
                'granted the "jobs.job_<id>" scope, where <id> is the ID of '
                'the job being updated.')
-        .param('id', 'The ID of the job.', paramType='path')
+        .modelParam('id', 'The ID of the job.', model='job', plugin='jobs', force=True)
         .param('log', 'A message to add to the job\'s log field. If you want '
                'to overwrite any existing log content, pass another parameter '
                '"overwrite=true".', required=False)
         .param('overwrite', 'If passing a log parameter, you may set this to '
                '"true" if you wish to overwrite the log field rather than '
-               'append to it. The default behavior is to append',
-               dataType='boolean', required=False)
+               'append to it.', dataType='boolean', required=False, default=False)
         .param('status', 'Update the status of the job. See the JobStatus '
                'enumeration in the constants module in this plugin for the '
-               'numerical values of each status.', dataType='integer',
-               required=False)
+               'numerical values of each status.', required=False)
         .param('progressTotal', 'Maximum progress value, set <= 0 to indicate '
-               'indeterminate progress for this job.', required=False)
-        .param('progressCurrent', 'Current progress value.', required=False)
+               'indeterminate progress for this job.', required=False, dataType='float')
+        .param('progressCurrent', 'Current progress value.', required=False, dataType='float')
         .param('progressMessage', 'Current progress message.', required=False)
         .param('notify', 'If this update should trigger a notification, set '
-               'this field to true. The default is true.', dataType='boolean',
-               required=False)
+               'this field to true.', dataType='boolean', required=False, default=True)
         .errorResponse('ID was invalid.')
         .errorResponse('Write access was denied for the job.', 403)
     )
-    def updateJob(self, job, params):
+    def updateJob(self, job, log, overwrite, notify, status, progressTotal, progressCurrent,
+                  progressMessage, params):
         user = self.getCurrentUser()
-        if user is None:
-            self.ensureTokenScopes('jobs.job_' + str(job['_id']))
-        else:
+        if user:
             self.model('job', 'jobs').requireAccess(
                 job, user, level=AccessType.WRITE)
+        else:
+            self.ensureTokenScopes('jobs.job_' + str(job['_id']))
 
-        event = events.trigger('jobs.job.update', {
-            'job': job,
-            'params': params
-        })
-
-        if not event.defaultPrevented:
-            job = self.model('job', 'jobs').updateJob(
-                job, log=params.get('log'), status=params.get('status'),
-                overwrite=self.boolParam('overwrite', params, False),
-                notify=self.boolParam('notify', params, default=True),
-                progressCurrent=params.get('progressCurrent'),
-                progressTotal=params.get('progressTotal'),
-                progressMessage=params.get('progressMessage'))
-
-        return job
+        return self.model('job', 'jobs').updateJob(
+            job, log=log, status=status, overwrite=overwrite, notify=notify,
+            progressCurrent=progressCurrent, progressTotal=progressTotal,
+            progressMessage=progressMessage)
 
     @access.user
-    @loadmodel(model='job', plugin='jobs', level=AccessType.ADMIN)
-    @describeRoute(
+    @autoDescribeRoute(
         Description('Delete an existing job.')
-        .param('id', 'The ID of the job.', paramType='path')
+        .modelParam('id', 'The ID of the job.', model='job', plugin='jobs', level=AccessType.ADMIN)
         .errorResponse('ID was invalid.')
         .errorResponse('Admin access was denied for the job.', 403)
     )
     def deleteJob(self, job, params):
         self.model('job', 'jobs').remove(job)
+
+    @access.admin
+    @autoDescribeRoute(
+        Description('Get types and statuses of all jobs')
+        .errorResponse('Admin access was denied for the job.', 403)
+    )
+    def allJobsTypesAndStatuses(self, params):
+        return self.model('job', 'jobs').getAllTypesAndStatuses(user='all')
+
+    @access.user
+    @autoDescribeRoute(
+        Description('Get types and statuses of jobs of current user')
+    )
+    def jobsTypesAndStatuses(self, params):
+        currentUser = self.getCurrentUser()
+        return self.model('job', 'jobs').getAllTypesAndStatuses(user=currentUser)

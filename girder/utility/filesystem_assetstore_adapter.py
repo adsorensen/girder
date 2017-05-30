@@ -17,21 +17,22 @@
 #  limitations under the License.
 ###############################################################################
 
-import cherrypy
+import filelock
+from hashlib import sha512
 import os
 import psutil
 import shutil
 import six
+from six import BytesIO
 import stat
 import tempfile
 
-from six import BytesIO
-from hashlib import sha512
+from girder import events, logger
+from girder.api.rest import setResponseHeader
+from girder.models.model_base import ValidationException, GirderException
+from girder.utility import mkdir, progress
 from . import hash_state
 from .abstract_assetstore_adapter import AbstractAssetstoreAdapter
-from girder.models.model_base import ValidationException, GirderException
-from girder import events, logger
-from girder.utility import mkdir, progress
 
 BUF_SIZE = 65536
 
@@ -216,11 +217,21 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
         path = os.path.join(dir, hash)
         abspath = os.path.join(self.assetstore['root'], path)
 
+        # Store the hash in the upload so that deleting a file won't delete
+        # this file
+        upload['sha512'] = hash
+        self.model('upload').update({'_id': upload['_id']}, update={'$set': {'sha512': hash}})
+
         mkdir(absdir)
 
-        if os.path.exists(abspath):
+        # Only maintain the lock which checking if the file exists.  The only
+        # other place the lock is used is checking if an upload task has
+        # reserved the file, so this is sufficient.
+        with filelock.FileLock(abspath + '.deleteLock'):
+            pathExists = os.path.exists(abspath)
+        if pathExists:
             # Already have this file stored, just delete temp file.
-            os.remove(upload['tempFile'])
+            os.unlink(upload['tempFile'])
         else:
             # Move the temp file to permanent location in the assetstore.
             # shutil.move works across filesystems
@@ -264,7 +275,7 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
                 'file-does-not-exist')
 
         if headers:
-            cherrypy.response.headers['Accept-Ranges'] = 'bytes'
+            setResponseHeader('Accept-Ranges', 'bytes')
             self.setContentHeaders(file, offset, endByte, contentDisposition)
 
         def stream():
@@ -292,18 +303,23 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
         Deletes the file from disk if it is the only File in this assetstore
         with the given sha512. Imported files are not actually deleted.
         """
-        if file.get('imported'):
+        if file.get('imported') or 'path' not in file:
             return
 
         q = {
             'sha512': file['sha512'],
             'assetstoreId': self.assetstore['_id']
         }
-        matching = self.model('file').find(q, limit=2, fields=[])
-        if matching.count(True) == 1:
-            path = os.path.join(self.assetstore['root'], file['path'])
-            if os.path.isfile(path):
-                os.remove(path)
+        path = os.path.join(self.assetstore['root'], file['path'])
+        if os.path.isfile(path):
+            with filelock.FileLock(path + '.deleteLock'):
+                matching = self.model('file').find(q, limit=2, fields=[])
+                matchingUpload = self.model('upload').findOne(q)
+                if matching.count(True) == 1 and matchingUpload is None:
+                    try:
+                        os.unlink(path)
+                    except Exception:
+                        logger.exception('Failed to delete file %s' % path)
 
     def cancelUpload(self, upload):
         """
@@ -340,17 +356,17 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
         file['imported'] = True
         return self.model('file').save(file)
 
-    def _importDataAsItem(self, name, user, folder, path, files,
-                          reuseExisting=True):
+    def _importDataAsItem(self, name, user, folder, path, files, reuseExisting=True, params=None):
+        params = params or {}
         item = self.model('item').createItem(
-            name=name, creator=user, folder=folder,
-            reuseExisting=reuseExisting)
+            name=name, creator=user, folder=folder, reuseExisting=reuseExisting)
         events.trigger('filesystem_assetstore_imported',
                        {'id': item['_id'], 'type': 'item',
                         'importPath': path})
         for fname in files:
-            self.importFile(item, os.path.join(path, fname),
-                            user, name=fname)
+            fpath = os.path.join(path, fname)
+            if self.shouldImportFile(fpath, params):
+                self.importFile(item, fpath, user, name=fname)
 
     def _hasOnlyFiles(self, path, files):
         return all(os.path.isfile(os.path.join(path, name)) for name in files)
@@ -358,8 +374,7 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
     def _importFileToFolder(self, name, user, parent, parentType, path):
         if parentType != 'folder':
             raise ValidationException(
-                'Files cannot be imported directly underneath a %s.' %
-                parentType)
+                'Files cannot be imported directly underneath a %s.' % parentType)
 
         item = self.model('item').createItem(
             name=name, creator=user, folder=parent, reuseExisting=True)
@@ -370,8 +385,7 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
         })
         self.importFile(item, path, user, name=name)
 
-    def importData(self, parent, parentType, params, progress, user,
-                   leafFoldersAsItems):
+    def importData(self, parent, parentType, params, progress, user, leafFoldersAsItems):
         importPath = params['importPath']
 
         if not os.path.exists(importPath):
@@ -384,8 +398,9 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
 
         listDir = os.listdir(importPath)
         if leafFoldersAsItems and self._hasOnlyFiles(importPath, listDir):
-            self._importDataAsItem(os.path.basename(importPath.rstrip(os.sep)),
-                                   user, parent, importPath, listDir)
+            self._importDataAsItem(
+                os.path.basename(importPath.rstrip(os.sep)), user, parent, importPath,
+                listDir, params=params)
             return
 
         for name in listDir:
@@ -394,24 +409,25 @@ class FilesystemAssetstoreAdapter(AbstractAssetstoreAdapter):
 
             if os.path.isdir(path):
                 localListDir = os.listdir(path)
-                if leafFoldersAsItems and self._hasOnlyFiles(
-                        path, localListDir):
-                    self._importDataAsItem(name, user, parent, path,
-                                           localListDir)
+                if leafFoldersAsItems and self._hasOnlyFiles(path, localListDir):
+                    self._importDataAsItem(name, user, parent, path, localListDir, params=params)
                 else:
                     folder = self.model('folder').createFolder(
                         parent=parent, name=name, parentType=parentType,
                         creator=user, reuseExisting=True)
                     events.trigger(
-                        'filesystem_assetstore_imported',
-                        {'id': folder['_id'], 'type': 'folder',
-                         'importPath': path})
-                    self.importData(folder, 'folder', params={
-                        'importPath': os.path.join(importPath, name)},
-                        progress=progress, user=user,
-                        leafFoldersAsItems=leafFoldersAsItems)
+                        'filesystem_assetstore_imported', {
+                            'id': folder['_id'],
+                            'type': 'folder',
+                            'importPath': path
+                        })
+                    nextPath = os.path.join(importPath, name)
+                    self.importData(
+                        folder, 'folder', params=dict(params, importPath=nextPath),
+                        progress=progress, user=user, leafFoldersAsItems=leafFoldersAsItems)
             else:
-                self._importFileToFolder(name, user, parent, parentType, path)
+                if self.shouldImportFile(path, params):
+                    self._importFileToFolder(name, user, parent, parentType, path)
 
     def findInvalidFiles(self, progress=progress.noProgress, filters=None,
                          checkSize=True, **kwargs):

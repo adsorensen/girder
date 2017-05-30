@@ -70,33 +70,6 @@ class Group(AccessControlledModel):
                     CoreEventHandler.GROUP_CREATOR_ACCESS,
                     self._grantCreatorAccess)
 
-    def filter(self, *args, **kwargs):
-        """
-        Preserved override for kwarg backwards compatibility. Prior to the
-        refactor for centralizing model filtering, this method's first formal
-        parameter was called "group", whereas the centralized version's first
-        parameter is called "doc". This override simply detects someone using
-        the old kwarg and converts it to the new form.
-
-        The old method for this model took two boolean kwargs, ``accessList``
-        and ``requests``. These options are now deprecated, but are still
-        supported for backward compatibility.
-        """
-        if 'group' in kwargs:
-            args = [kwargs.pop('group')] + list(args)
-
-        acl = kwargs.pop('accessList') if 'accessList' in kwargs else False
-        reqs = kwargs.pop('requests') if 'requests' in kwargs else False
-
-        group = super(Group, self).filter(*args, **kwargs)
-
-        if acl and 'access' not in group:
-            group['access'] = self.getFullAccessList(args[0])
-        if reqs and 'requests' not in group:
-            group['requests'] = list(self.getFullRequestList(args[0]))
-
-        return group
-
     def validate(self, doc):
         doc['name'] = doc['name'].strip()
         doc['lowerName'] = doc['name'].lower()
@@ -170,7 +143,7 @@ class Group(AccessControlledModel):
         if not group['_id'] in user['groups']:
             user['groups'].append(group['_id'])
             # saved again in setUserAccess...
-            self.model('user').save(user, validate=False)
+            user = self.model('user').save(user, validate=False)
 
         # Delete outstanding request if one exists
         self._deleteRequest(group, user)
@@ -208,7 +181,7 @@ class Group(AccessControlledModel):
 
             if not user['_id'] in group['requests']:
                 group['requests'].append(user['_id'])
-                self.save(group, validate=False)
+                group = self.save(group, validate=False)
 
         return group
 
@@ -278,7 +251,7 @@ class Group(AccessControlledModel):
         user['groupInvites'] = list(filter(
             lambda inv: not inv['groupId'] == group['_id'],
             user.get('groupInvites', [])))
-        self.model('user').save(user, validate=False)
+        user = self.model('user').save(user, validate=False)
 
         # Remove all group access for this user on this group.
         self.setUserAccess(group, user, level=None, save=True)
@@ -376,7 +349,7 @@ class Group(AccessControlledModel):
         if user is None:
             # Short-circuit the case of anonymous users
             return level == AccessType.READ and doc.get('public', False) is True
-        elif user.get('admin', False) is True:
+        elif user['admin']:
             # Short-circuit the case of admins
             return True
         elif level == AccessType.READ:
@@ -403,7 +376,7 @@ class Group(AccessControlledModel):
                 return AccessType.READ
             else:
                 return AccessType.NONE
-        elif user.get('admin', False):
+        elif user['admin']:
             return AccessType.ADMIN
         else:
             access = doc.get('access', {})

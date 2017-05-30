@@ -23,6 +23,7 @@ import cherrypy
 import io
 import json
 import logging
+import mock
 import os
 import shutil
 import signal
@@ -33,7 +34,7 @@ import uuid
 
 from six import BytesIO
 from six.moves import urllib
-from girder.utility import model_importer
+from girder.utility import model_importer, plugin_utilities
 from girder.utility.server import setup as setupServer
 from girder.constants import AccessType, ROOT_DIR, SettingKey
 from girder.models import getDbConnection
@@ -117,10 +118,30 @@ def dropFsAssetstore(path):
     """
     Delete all of the files in a filesystem assetstore.  This unlinks the path,
     which is potentially dangerous.
+
     :param path: the path to remove.
     """
     if os.path.isdir(path):
         shutil.rmtree(path)
+
+
+def mockPluginDir(path):
+    """
+    Modify the location that the server will search when loading plugins. Call this prior to
+    calling startServer. Returns the original un-mocked function.
+
+    :param path: The directory in which to search for plugins.
+    """
+    oldFn = plugin_utilities.getPluginDir
+    plugin_utilities.getPluginDir = mock.Mock(return_value=path)
+    return oldFn
+
+
+def unmockPluginDir(oldFn):
+    """
+    Restore the getPluginDir function to its original un-mocked version.
+    """
+    plugin_utilities.getPluginDir = oldFn
 
 
 class TestCase(unittest.TestCase, model_importer.ModelImporter):
@@ -166,7 +187,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
             self.assetstore = self.model('assetstore'). \
                 createFilesystemAssetstore(name='Test', root=assetstorePath)
 
-        addr = ':'.join(map(str, mockSmtp.address))
+        addr = ':'.join(map(str, mockSmtp.address or ('localhost', 25)))
         self.model('setting').set(SettingKey.SMTP_HOST, addr)
         self.model('setting').set(SettingKey.UPLOAD_MINIMUM_CHUNK_SIZE, 0)
         self.model('setting').set(SettingKey.PLUGINS_ENABLED, enabledPlugins)
@@ -178,6 +199,12 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         # If "self.setUp" is overridden, "self.assetstoreType" may not be set
         if getattr(self, 'assetstoreType', None) == 'gridfsrs':
             mongo_replicaset.stopMongoReplicaSet()
+
+    def mockPluginDir(self, path):
+        self._oldPluginDirFn = mockPluginDir(path)
+
+    def unmockPluginDir(self):
+        unmockPluginDir(self._oldPluginDirFn)
 
     def assertStatusOk(self, response):
         """
@@ -205,6 +232,8 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
                 msg += ' Response body was:\n%s' % json.dumps(
                     response.json, sort_keys=True, indent=4,
                     separators=(',', ': '))
+            else:
+                msg += 'Response body was:\n%s' % self.getBody(response)
 
             self.fail(msg)
 
@@ -283,8 +312,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         :param param: The name of the missing parameter.
         :type param: str
         """
-        self.assertEqual("Parameter '%s' is required." % param,
-                         response.json.get('message', ''))
+        self.assertEqual('Parameter "%s" is required.' % param, response.json.get('message', ''))
         self.assertStatus(response, 400)
 
     def getSseMessages(self, resp):
@@ -339,8 +367,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
 
         return self.model('file').load(file['_id'], force=True)
 
-    def ensureRequiredParams(self, path='/', method='GET', required=(),
-                             user=None):
+    def ensureRequiredParams(self, path='/', method='GET', required=(), user=None):
         """
         Ensure that a set of parameters is required by the endpoint.
 
@@ -351,8 +378,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         """
         for exclude in required:
             params = dict.fromkeys([p for p in required if p != exclude], '')
-            resp = self.request(path=path, method=method, params=params,
-                                user=user)
+            resp = self.request(path=path, method=method, params=params, user=user)
             self.assertMissingParameter(resp, exclude)
 
     def _genToken(self, user):
@@ -383,7 +409,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
                 prefix='/api/v1', isJson=True, basicAuth=None, body=None,
                 type=None, exception=False, cookie=None, token=None,
                 additionalHeaders=None, useHttps=False,
-                authHeader='Girder-Authorization'):
+                authHeader='Girder-Authorization', appPrefix=''):
         """
         Make an HTTP request.
 
@@ -408,33 +434,39 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         :param useHttps: If True, pretend to use HTTPS.
         :param authHeader: The HTTP request header to use for authentication.
         :type authHeader: str
+        :param appPrefix: The CherryPy application prefix (mounted location without trailing slash)
+        :type appPrefix: str
         :returns: The cherrypy response object from the request.
         """
-        if not params:
-            params = {}
-
         headers = [('Host', '127.0.0.1'), ('Accept', 'application/json')]
         qs = fd = None
 
         if additionalHeaders:
             headers.extend(additionalHeaders)
-        if method in ['POST', 'PUT', 'PATCH'] or body:
-            if isinstance(body, six.string_types):
-                body = body.encode('utf8')
-            qs = urllib.parse.urlencode(params).encode('utf8')
-            if type is None:
-                headers.append(('Content-Type',
-                                'application/x-www-form-urlencoded'))
-            else:
-                headers.append(('Content-Type', type))
-                qs = body
-            headers.append(('Content-Length', '%d' % len(qs)))
-            fd = BytesIO(qs)
-            qs = None
-        elif params:
+
+        if isinstance(body, six.text_type):
+            body = body.encode('utf8')
+
+        if params:
             qs = urllib.parse.urlencode(params)
 
-        app = cherrypy.tree.apps['']
+        if params and body:
+            # In this case, we are forced to send params in query string
+            fd = BytesIO(body)
+            headers.append(('Content-Type', type))
+            headers.append(('Content-Length', '%d' % len(body)))
+        elif method in ['POST', 'PUT', 'PATCH'] or body:
+            if type:
+                qs = body
+            elif params:
+                qs = qs.encode('utf8')
+
+            headers.append(('Content-Type', type or 'application/x-www-form-urlencoded'))
+            headers.append(('Content-Length', '%d' % len(qs or b'')))
+            fd = BytesIO(qs or b'')
+            qs = None
+
+        app = cherrypy.tree.apps[appPrefix]
         request, response = app.get_serving(
             local, remote, 'http' if not useHttps else 'https', 'HTTP/1.1')
         request.show_tracebacks = True
@@ -454,6 +486,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
             try:
                 response.json = json.loads(body)
             except Exception:
+                print(url)
                 print(body)
                 raise AssertionError('Did not receive JSON response')
 
@@ -483,7 +516,7 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         return data
 
     def multipartRequest(self, fields, files, path, method='POST', user=None,
-                         prefix='/api/v1', isJson=True):
+                         prefix='/api/v1', isJson=True, token=None):
         """
         Make an HTTP request with multipart/form-data encoding. This can be
         used to send files with the request.
@@ -496,10 +529,11 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         :type method: str
         :param prefix: The prefix to use before the path.
         :param isJson: Whether the response is a JSON object.
+        :param token: Auth token to use.
+        :type token: str
         :returns: The cherrypy response object from the request.
         """
-        contentType, body, size = MultipartFormdataEncoder().encode(
-            fields, files)
+        contentType, body, size = MultipartFormdataEncoder().encode(fields, files)
 
         headers = [('Host', '127.0.0.1'),
                    ('Accept', 'application/json'),
@@ -510,7 +544,9 @@ class TestCase(unittest.TestCase, model_importer.ModelImporter):
         request, response = app.get_serving(local, remote, 'http', 'HTTP/1.1')
         request.show_tracebacks = True
 
-        if user is not None:
+        if token is not None:
+            headers.append(('Girder-Token', token))
+        elif user is not None:
             headers.append(('Girder-Token', self._genToken(user)))
 
         fd = io.BytesIO(body)

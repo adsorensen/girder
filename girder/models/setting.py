@@ -22,9 +22,10 @@ import cherrypy
 import pymongo
 import six
 
-from ..constants import SettingDefault, SettingKey, TerminalColor
+from ..constants import GIRDER_ROUTE_ID, GIRDER_STATIC_ROUTE_ID, SettingDefault, SettingKey
 from .model_base import Model, ValidationException
-from girder.utility import plugin_utilities, setting_utilities
+from girder import logprint
+from girder.utility import config, plugin_utilities, setting_utilities
 from girder.utility.model_importer import ModelImporter
 from bson.objectid import ObjectId
 
@@ -71,9 +72,9 @@ class Setting(Model):
                            'count': {'$sum': 1}}}, {
                 '$match': {'count': {'$gt': 1}}}])
             for duplicate in duplicates:
-                print(TerminalColor.warning(
+                logprint.warning(
                     'Removing duplicate setting with key %s.' % (
-                        duplicate['key'])))
+                        duplicate['key']))
                 # Remove all of the duplicates.  Keep the item with the lowest
                 # id in Mongo.
                 for duplicateId in sorted(duplicate['ids'])[1:]:
@@ -164,6 +165,17 @@ class Setting(Model):
         return None
 
     @staticmethod
+    @setting_utilities.validator(SettingKey.SECURE_COOKIE)
+    def validateSecureCookie(doc):
+        if not isinstance(doc['value'], bool):
+            raise ValidationException('Secure cookie option must be boolean.', 'value')
+
+    @staticmethod
+    @setting_utilities.default(SettingKey.SECURE_COOKIE)
+    def defaultSecureCookie():
+        return config.getConfig()['server']['mode'] == 'production'
+
+    @staticmethod
     @setting_utilities.validator(SettingKey.PLUGINS_ENABLED)
     def validateCorePluginsEnabled(doc):
         """
@@ -214,6 +226,13 @@ class Setting(Model):
         except ValueError:
             pass  # We want to raise the ValidationException
         raise ValidationException('Cookie lifetime must be an integer > 0.', 'value')
+
+    @staticmethod
+    @setting_utilities.validator(SettingKey.SERVER_ROOT)
+    def validateCoreServerRoot(doc):
+        val = doc['value']
+        if val and not val.startswith('http://') and not val.startswith('https://'):
+            raise ValidationException('Server root must start with http:// or https://.', 'value')
 
     @staticmethod
     @setting_utilities.validator(SettingKey.CORS_ALLOW_METHODS)
@@ -291,6 +310,35 @@ class Setting(Model):
         if doc['value'] not in ('required', 'optional', 'disabled'):
             raise ValidationException(
                 'Email verification must be "required", "optional", or "disabled".', 'value')
+
+    @staticmethod
+    @setting_utilities.validator(SettingKey.ROUTE_TABLE)
+    def validateCoreRouteTable(doc):
+        nonEmptyRoutes = [route for route in doc['value'].values() if route]
+        for key in [GIRDER_ROUTE_ID, GIRDER_STATIC_ROUTE_ID]:
+            if key not in doc['value'] or not doc['value'][key]:
+                raise ValidationException('Girder and static root must be routeable.')
+
+        for key in doc['value']:
+            if (key != GIRDER_STATIC_ROUTE_ID and doc['value'][key] and
+                    not doc['value'][key].startswith('/')):
+                raise ValidationException('Routes must begin with a forward slash.')
+        if doc['value'].get(GIRDER_STATIC_ROUTE_ID):
+            if (not doc['value'][GIRDER_STATIC_ROUTE_ID].startswith('/') and
+                    '://' not in doc['value'][GIRDER_STATIC_ROUTE_ID]):
+                raise ValidationException(
+                    'Static root must begin with a forward slash or contain a URL scheme.')
+
+        if len(nonEmptyRoutes) > len(set(nonEmptyRoutes)):
+            raise ValidationException('Routes must be unique.')
+
+    @staticmethod
+    @setting_utilities.default(SettingKey.ROUTE_TABLE)
+    def defaultCoreRouteTable():
+        return {
+            GIRDER_ROUTE_ID: '/',
+            GIRDER_STATIC_ROUTE_ID: '/static'
+        }
 
     @staticmethod
     @setting_utilities.validator(SettingKey.SMTP_HOST)

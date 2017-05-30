@@ -1,3 +1,4 @@
+/package-lock.json
 *.py[cod]
 node_modules
 docs/_build
@@ -9,9 +10,12 @@ girder.egg-info
 .*.swo
 .vagrant
 phantom-*.png
+phantom_*.png
 girder-*.tar.gz
 __pycache__
 ### PyCharm ###
 .idea/
 .PyCharm50/
 .eslintcache
+/npm-debug.log
+**/*.retry

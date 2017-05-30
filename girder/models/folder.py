@@ -50,21 +50,9 @@ class Folder(AccessControlledModel):
         })
 
         self.exposeFields(level=AccessType.READ, fields=(
-            '_id', 'name', 'public', 'description', 'created', 'updated',
+            '_id', 'name', 'public', 'publicFlags', 'description', 'created', 'updated',
             'size', 'meta', 'parentId', 'parentCollection', 'creatorId',
             'baseParentType', 'baseParentId'))
-
-    def filter(self, *args, **kwargs):
-        """
-        Preserved override for kwarg backwards compatibility. Prior to the
-        refactor for centralizing model filtering, this method's first formal
-        parameter was called "folder", whereas the centralized version's first
-        parameter is called "doc". This override simply detects someone using
-        the old kwarg and converts it to the new form.
-        """
-        if 'folder' in kwargs:
-            args = [kwargs.pop('folder')] + list(args)
-        return super(Folder, self).filter(*args, **kwargs)
 
     def validate(self, doc, allowRename=False):
         """
@@ -74,7 +62,7 @@ class Folder(AccessControlledModel):
         :param doc: the folder document to validate.
         :param allowRename: if True and a folder or item exists with the same
                             name, rename the folder so that it is unique.
-        :returns: the validated folder document.
+        :returns: `the validated folder document`
         """
         doc['name'] = doc['name'].strip()
         doc['lowerName'] = doc['name'].lower()
@@ -145,9 +133,9 @@ class Folder(AccessControlledModel):
             baseParent = pathFromRoot[0]
             doc['baseParentId'] = baseParent['object']['_id']
             doc['baseParentType'] = baseParent['type']
-            self.save(doc, triggerEvents=False)
+            doc = self.save(doc, triggerEvents=False)
         if doc is not None and 'lowerName' not in doc:
-            self.save(doc, triggerEvents=False)
+            doc = self.save(doc, triggerEvents=False)
 
         return doc
 
@@ -168,7 +156,7 @@ class Folder(AccessControlledModel):
 
         return size
 
-    def setMetadata(self, folder, metadata):
+    def setMetadata(self, folder, metadata, allowNull=False):
         """
         Set metadata on a folder.  A `ValidationException` is thrown in the
         cases where the metadata JSON object is badly formed, or if any of the
@@ -179,6 +167,9 @@ class Folder(AccessControlledModel):
         :param metadata: A dictionary containing key-value pairs to add to
                      the folder's meta field
         :type metadata: dict
+        :param allowNull: Whether to allow `null` values to be set in the item's
+            metadata. If set to `False` or omitted, a `null` value will cause that
+            metadata field to be deleted.
         :returns: the folder document
         """
         if 'meta' not in folder:
@@ -188,13 +179,41 @@ class Folder(AccessControlledModel):
         folder['meta'].update(six.viewitems(metadata))
 
         # Remove metadata fields that were set to null (use items in py3)
-        folder['meta'] = {k: v
-                          for k, v in six.viewitems(folder['meta'])
-                          if v is not None}
+        if not allowNull:
+            toDelete = [k for k, v in six.viewitems(metadata) if v is None]
+            for key in toDelete:
+                del folder['meta'][key]
 
         folder['updated'] = datetime.datetime.utcnow()
 
+        self.validateKeys(folder['meta'])
+
         # Validate and save the item
+        return self.save(folder)
+
+    def deleteMetadata(self, folder, fields):
+        """
+        Delete metadata on a folder. A `ValidationException` is thrown if the
+        metadata field names contain a period ('.') or begin with a dollar sign
+        ('$').
+
+        :param folder: The folder to delete metadata from.
+        :type folder: dict
+        :param fields: An array containing the field names to delete from the
+            folder's meta field
+        :type field: list
+        :returns: the folder document
+        """
+        self.validateKeys(fields)
+
+        if 'meta' not in folder:
+            folder['meta'] = {}
+
+        for field in fields:
+            folder['meta'].pop(field, None)
+
+        folder['updated'] = datetime.datetime.utcnow()
+
         return self.save(folder)
 
     def _updateDescendants(self, folderId, updateQuery):
@@ -647,7 +666,7 @@ class Folder(AccessControlledModel):
         :type subpath: bool
         :param mimeFilter: Optional list of MIME types to filter by. Set to
             None to include all files.
-        :type mimeFilter: list or tuple
+        :type mimeFilter: `list or tuple`
         :param data: If True return raw content of each file as stored in the
             assetstore, otherwise return file document.
         :type data: bool
@@ -761,7 +780,7 @@ class Folder(AccessControlledModel):
                 newFolder[key] = copy.deepcopy(srcFolder[key])
                 updated = True
         if updated:
-            self.save(newFolder, triggerEvents=False)
+            newFolder = self.save(newFolder, triggerEvents=False)
         # Give listeners a chance to change things
         events.trigger('model.folder.copy.prepare', (srcFolder, newFolder))
         # copy items
@@ -787,7 +806,7 @@ class Folder(AccessControlledModel):
         return self.load(newFolder['_id'], force=True)
 
     def setAccessList(self, doc, access, save=False, recurse=False, user=None,
-                      progress=noProgress, setPublic=None):
+                      progress=noProgress, setPublic=None, publicFlags=None, force=False):
         """
         Overrides AccessControlledModel.setAccessList to add a recursive
         option. When `recurse=True`, this will set the access list on all
@@ -796,7 +815,7 @@ class Folder(AccessControlledModel):
         skipped.
 
         :param doc: The folder to set access settings on.
-        :type doc: folder
+        :type doc: girder.models.folder
         :param access: The access control list.
         :type access: dict
         :param save: Whether the changes should be saved to the database.
@@ -810,11 +829,22 @@ class Folder(AccessControlledModel):
         :param setPublic: Pass this if you wish to set the public flag on the
             resources being updated.
         :type setPublic: bool or None
+        :param publicFlags: Pass this if you wish to set the public flag list on
+            resources being updated.
+        :type publicFlags: flag identifier str, or list/set/tuple of them, or None
+        :param force: Set this to True to set the flags regardless of the passed in
+            user's permissions.
+        :type force: bool
         """
         progress.update(increment=1, message='Updating ' + doc['name'])
         if setPublic is not None:
             self.setPublic(doc, setPublic, save=False)
-        doc = AccessControlledModel.setAccessList(self, doc, access, save=save)
+
+        if publicFlags is not None:
+            doc = self.setPublicFlags(doc, publicFlags, user=user, save=False, force=force)
+
+        doc = AccessControlledModel.setAccessList(
+            self, doc, access, user=user, save=save, force=force)
 
         if recurse:
             cursor = self.find({
@@ -828,42 +858,41 @@ class Folder(AccessControlledModel):
             for folder in subfolders:
                 self.setAccessList(
                     folder, access, save=True, recurse=True, user=user,
-                    progress=progress, setPublic=setPublic)
+                    progress=progress, setPublic=setPublic, publicFlags=publicFlags, force=force)
 
         return doc
 
-    def isOrphan(self, folder, user=None):
+    def isOrphan(self, folder):
         """
         Returns True if this folder is orphaned (its parent is missing).
 
         :param folder: The folder to check.
         :type folder: dict
-        :param user: The user for permissions.
-        :type user: dict or None
         """
         return not self.model(folder.get('parentCollection')).load(
-            folder.get('parentId'), user=user)
+            folder.get('parentId'), force=True)
 
-    def updateSize(self, doc, user):
+    def updateSize(self, doc):
         """
         Recursively recomputes the size of this folder and its underlying
         folders and fixes the sizes as needed.
 
         :param doc: The folder.
         :type doc: dict
-        :param user: The admin user for permissions.
-        :type user: dict
         """
         size = 0
         fixes = 0
         # recursively fix child folders but don't include their size
-        children = self.childFolders(doc, 'folder', user)
+        children = self.model('folder').find({
+            'parentId': doc['_id'],
+            'parentCollection': 'folder'
+        })
         for child in children:
-            _, f = self.model('folder').updateSize(child, user)
+            _, f = self.model('folder').updateSize(child)
             fixes += f
         # get correct size from child items
         for item in self.childItems(doc):
-            s, f = self.model('item').updateSize(item, user)
+            s, f = self.model('item').updateSize(item)
             size += s
             fixes += f
         # fix value if incorrect

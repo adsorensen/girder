@@ -27,6 +27,7 @@ from .. import base
 
 from girder import events
 from girder.constants import AccessType, SettingKey, TokenScope
+from girder.models.model_base import ValidationException
 
 
 def setUpModule():
@@ -39,7 +40,7 @@ def tearDownModule():
 
 class UserTestCase(base.TestCase):
 
-    def _verifyAuthCookie(self, resp):
+    def _verifyAuthCookie(self, resp, secure=''):
         self.assertTrue('girderToken' in resp.cookie)
         self.cookieVal = resp.cookie['girderToken'].value
         self.assertFalse(not self.cookieVal)
@@ -47,6 +48,7 @@ class UserTestCase(base.TestCase):
         self.assertEqual(
             resp.cookie['girderToken']['expires'],
             lifetime * 3600 * 24)
+        self.assertEqual(resp.cookie['girderToken']['secure'], secure)
 
     def _verifyDeletedCookie(self, resp):
         self.assertTrue('girderToken' in resp.cookie)
@@ -133,13 +135,13 @@ class UserTestCase(base.TestCase):
         # Login with unregistered email
         resp = self.request(path='/user/authentication', method='GET',
                             basicAuth='incorrect@email.com:badpassword')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
         self.assertEqual('Login failed.', resp.json['message'])
 
         # Correct email, but wrong password
         resp = self.request(path='/user/authentication', method='GET',
                             basicAuth='good@email.com:badpassword')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
         self.assertEqual('Login failed.', resp.json['message'])
 
         # Login successfully with email
@@ -154,7 +156,7 @@ class UserTestCase(base.TestCase):
         # Invalid login
         resp = self.request(path='/user/authentication', method='GET',
                             basicAuth='badlogin:good:password')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
         self.assertEqual('Login failed.', resp.json['message'])
 
         # Login successfully with fallback Authorization header
@@ -163,13 +165,19 @@ class UserTestCase(base.TestCase):
                             authHeader='Authorization')
         self.assertStatusOk(resp)
 
+        # Test secure cookie validation
+        with self.assertRaises(ValidationException):
+            self.model('setting').set(SettingKey.SECURE_COOKIE, 'bad value')
+        # Set secure cookie value
+        self.model('setting').set(SettingKey.SECURE_COOKIE, True)
+
         # Login successfully with login
         resp = self.request(path='/user/authentication', method='GET',
                             basicAuth='goodlogin:good:password')
         self.assertStatusOk(resp)
 
-        # Make sure we got a nice cookie
-        self._verifyAuthCookie(resp)
+        # Make sure we got a nice (secure) cookie
+        self._verifyAuthCookie(resp, secure=True)
 
         # Test user/me
         resp = self.request(path='/user/me', method='GET', user=user)
@@ -198,7 +206,7 @@ class UserTestCase(base.TestCase):
         # Login unsuccessfully
         resp = self.request(path='/user/authentication', method='GET',
                             basicAuth='goodlogin:badpassword')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
         self.assertEqual('Login failed.', resp.json['message'])
 
         # Login successfully
@@ -381,16 +389,14 @@ class UserTestCase(base.TestCase):
                                               'user2@user.com')
 
         # Reset password should require email param
-        resp = self.request(path='/user/password', method='DELETE', params={})
-        self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'], "Parameter 'email' is required.")
+        self.ensureRequiredParams(path='/user/password', method='DELETE', required={'email'})
 
         # Reset email with an incorrect email
         resp = self.request(path='/user/password', method='DELETE', params={
             'email': 'bad_email@user.com'
         })
         self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'], "That email is not registered.")
+        self.assertEqual(resp.json['message'], 'That email is not registered.')
 
         # Actually reset password
         self.assertTrue(base.mockSmtp.isMailQueueEmpty())
@@ -398,12 +404,12 @@ class UserTestCase(base.TestCase):
             'email': 'user@user.com'
         })
         self.assertStatusOk(resp)
-        self.assertEqual(resp.json['message'], "Sent password reset email.")
+        self.assertEqual(resp.json['message'], 'Sent password reset email.')
 
         # Old password should no longer work
         resp = self.request(path='/user/authentication', method='GET',
                             basicAuth='user@user.com:passwd')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
 
         self.assertTrue(base.mockSmtp.waitForMail())
         msg = base.mockSmtp.getMail(parse=True)
@@ -513,8 +519,19 @@ class UserTestCase(base.TestCase):
 
         # cannot login without being approved
         resp = self.request('/user/authentication', basicAuth='user:password')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
         self.assertTrue(resp.json['extra'] == 'accountApproval')
+
+        # ensure only admins can change status
+        path = '/user/%s' % user['_id']
+        resp = self.request(path=path, method='PUT', user=user, params={
+            'firstName': user['firstName'],
+            'lastName': user['lastName'],
+            'email': user['email'],
+            'status': 'enabled'
+        })
+        self.assertStatus(resp, 403)
+        self.assertEqual(resp.json['message'], 'Only admins may change status.')
 
         # approve account
         path = '/user/%s' % user['_id']
@@ -546,8 +563,8 @@ class UserTestCase(base.TestCase):
 
         # cannot login again
         resp = self.request('/user/authentication', basicAuth='user:password')
-        self.assertStatus(resp, 403)
-        self.assertTrue(resp.json['extra'] == 'accountApproval')
+        self.assertStatus(resp, 401)
+        self.assertEqual(resp.json['extra'], 'disabled')
 
     def testEmailVerification(self):
         self.model('setting').set(SettingKey.EMAIL_VERIFICATION, 'required')
@@ -568,7 +585,7 @@ class UserTestCase(base.TestCase):
 
         # cannot login without verifying email
         resp = self.request('/user/authentication', basicAuth='user:password')
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
         self.assertTrue(resp.json['extra'] == 'emailVerification')
 
         # get verification link
@@ -591,10 +608,8 @@ class UserTestCase(base.TestCase):
         self.model('user').createUser('user1', 'passwd', 'tst', 'usr',
                                       'user@user.com')
         # Temporary password should require email param
-        resp = self.request(path='/user/password/temporary', method='PUT',
-                            params={})
-        self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'], "Parameter 'email' is required.")
+        self.ensureRequiredParams(
+            path='/user/password/temporary', method='PUT', required={'email'})
         # Temporary password with an incorrect email
         resp = self.request(path='/user/password/temporary', method='PUT',
                             params={'email': 'bad_email@user.com'})
@@ -618,11 +633,8 @@ class UserTestCase(base.TestCase):
         # Checking if a token is a valid temporary token should fail if the
         # token is missing or doesn't match the user ID
         path = '/user/password/temporary/' + userId
-        resp = self.request(path=path, method='GET', params={})
-        self.assertStatus(resp, 400)
-        self.assertEqual(resp.json['message'], "Parameter 'token' is required.")
-        resp = self.request(path=path, method='GET',
-                            params={'token': 'not valid'})
+        self.ensureRequiredParams(path=path, required={'token'})
+        resp = self.request(path=path, method='GET', params={'token': 'not valid'})
         self.assertStatus(resp, 400)
         resp = self.request(path=path, method='GET', params={'token': tokenId})
         self.assertStatusOk(resp)

@@ -26,7 +26,7 @@ from .. import constants
 
 class Bitbucket(ProviderBase):
     _AUTH_URL = 'https://bitbucket.org/site/oauth2/authorize'
-    _AUTH_SCOPES = ('account',)
+    _AUTH_SCOPES = ['account']
     _TOKEN_URL = 'https://bitbucket.org/site/oauth2/access_token'
     _API_USER_URL = 'https://api.bitbucket.org/2.0/user'
     _API_EMAILS_URL = 'https://api.bitbucket.org/2.0/user/emails'
@@ -110,10 +110,8 @@ class Bitbucket(ProviderBase):
 
         login = resp.get('username', None)
 
-        names = resp.get('display_name', '').split()
-        firstName = names[0] if names else ''
-        lastName = names[-1] if len(names) > 1 else ''
+        names = (resp.get('display_name') or login).split()
+        firstName, lastName = names[0], names[-1]
 
-        user = self._createOrReuseUser(oauthId, email, firstName, lastName,
-                                       login)
+        user = self._createOrReuseUser(oauthId, email, firstName, lastName, login)
         return user

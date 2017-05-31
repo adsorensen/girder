@@ -71,6 +71,9 @@ var DicomView = View.extend({
         'input .dicom-slider': _.debounce(function (event) {
             this.setIndex(event.target.value);
         }, 10)
+        'input .dropdown': _.debounce(function (event) {
+            
+        }, 10)
     },
 
     initialize: function (settings) {

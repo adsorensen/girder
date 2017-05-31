@@ -5,7 +5,6 @@ import '../stylesheets/dicom_viewer.styl';
 import { restRequest, apiRoot } from 'girder/rest';
 import View from 'girder/views/View';
 
-
 import _ from 'underscore';
 import daikon from 'daikon';
 import vtkImageSlice from 'vtk.js/Sources/Rendering/Core/ImageSlice';

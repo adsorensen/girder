@@ -63,6 +63,11 @@ var DicomView = View.extend({
             this.autoLevels();
             this.iren.render();
         },
+        'click .dicom-test': function (event) {
+            event.preventDefault();
+            this.camera.zoom(9 / 8);
+            this.iren.render();
+        },
         'input .dicom-slider': _.debounce(function (event) {
             this.setIndex(event.target.value);
         }, 10)

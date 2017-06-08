@@ -1,3 +1,4 @@
+import $ from 'jquery';
 import _ from 'underscore';
 
 import WidgetCollection from '../collections/WidgetCollection';
@@ -25,8 +26,8 @@ const TaskRunView = View.extend({
         this._outputWidgets = new WidgetCollection();
         this._initialValues = settings.initialValues || null;
 
-        const inputs = this._initialValues && this._initialValues.inputs || {};
-        const outputs = this._initialValues && this._initialValues.outputs || {};
+        const inputs = (this._initialValues && this._initialValues.inputs) || {};
+        const outputs = (this._initialValues && this._initialValues.outputs) || {};
 
         // Build all the widget models from the task IO spec
         this._inputWidgets.add(

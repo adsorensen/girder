@@ -1,3 +1,4 @@
+import $ from 'jquery';
 import _ from 'underscore';
 
 import PluginConfigBreadcrumbWidget from 'girder/views/widgets/PluginConfigBreadcrumbWidget';
@@ -182,4 +183,3 @@ var ConfigView = View.extend({
 });
 
 export default ConfigView;
-

@@ -7,6 +7,7 @@
  * the context of that test application, and afterwards runs our custom coverage
  * handler on the coverage data.
  */
+/* eslint-disable node/no-deprecated-api */
 /* globals phantom, WebPage, jasmine, girderTest */
 
 var system = require('system');
@@ -173,7 +174,7 @@ page.onLoadFinished = function (status) {
         }
         page.evaluate(function () {
             if (window.girderTest) {
-                girderTest.promise.then(function () {
+                girderTest.promise.done(function () {
                     jasmine.getEnv().execute();
                 }).fail(function (err) {
                     window.callPhantom({

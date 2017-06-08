@@ -1,3 +1,5 @@
+import $ from 'jquery';
+
 import ViewTemplate from '../templates/view.pug';
 import TagsTemplate from '../templates/tags.pug';
 import '../stylesheets/dicom_viewer.styl';
@@ -314,7 +316,7 @@ var DicomView = View.extend({
 });
 
 function createImageData(image) {
-    const rows = image.getRows()
+    const rows = image.getRows();
     const cols = image.getCols();
     const rowSpacing = image.getPixelSpacing()[0];
     const colSpacing = image.getPixelSpacing()[1];

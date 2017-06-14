@@ -86,7 +86,7 @@ var AccessWidget = View.extend({
         $.when(
             flagListPromise,
             this.model.fetchAccess()
-        ).then(() => {
+        ).done(() => {
             this.render();
         });
     },
@@ -353,9 +353,9 @@ var AccessWidget = View.extend({
                     $el.find('.g-access-col-right>select').val(),
                     10
                 ),
-                flags: _.map($el.find('.g-flag-checkbox:checked'), (checkbox) => {
-                    return $(checkbox).attr('flag');
-                })
+                flags: _.map($el.find('.g-flag-checkbox:checked'),
+                    (checkbox) => $(checkbox).attr('flag')
+                )
             });
         }, this);
 
@@ -369,9 +369,9 @@ var AccessWidget = View.extend({
                     $el.find('.g-access-col-right>select').val(),
                     10
                 ),
-                flags: _.map($el.find('.g-flag-checkbox:checked'), (checkbox) => {
-                    return $(checkbox).attr('flag');
-                })
+                flags: _.map($el.find('.g-flag-checkbox:checked'),
+                    (checkbox) => $(checkbox).attr('flag')
+                )
             });
         }, this);
 

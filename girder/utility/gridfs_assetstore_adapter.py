@@ -22,10 +22,12 @@ from hashlib import sha512
 import pymongo
 import six
 from six import BytesIO
+import time
 import uuid
 
 from girder import logger
 from girder.api.rest import setResponseHeader
+from girder.external.mongodb_proxy import MongoProxy
 from girder.models import getDbConnection
 from girder.models.model_base import ValidationException
 from . import hash_state
@@ -36,15 +38,56 @@ from .abstract_assetstore_adapter import AbstractAssetstoreAdapter
 # unless they are sending the final chunk.
 CHUNK_SIZE = 2097152
 
+# Cache recent connections so we can skip some start up actions
+RECENT_CONNECTION_CACHE_TIME = 600  # seconds
+RECENT_CONNECTION_CACHE_MAX_SIZE = 100
+_recentConnections = {}
+
 
 def _ensureChunkIndices(collection):
     """
     Ensure that we have appropriate indices on the chunk collection.
+
+    :param collection: a connection to a mongo collection.
     """
     collection.create_index([
         ('uuid', pymongo.ASCENDING),
         ('n', pymongo.ASCENDING)
     ], unique=True)
+
+
+def _setupSharding(collection, keyname='uuid'):
+    """
+    If we are communicating with a sharded server, and the collection is not
+    sharded, ask for it to be sharded based on a key.
+
+    :param collection: a connection to a mongo collection.
+    :param keyname: the name of the key to shard on.
+    :returns: True if sharding was added, False if it could not be added, or
+        'present' if already sharded.
+    """
+    database = collection.database
+    client = database.client
+    stat = client.admin.command('serverStatus')
+    # sharding will be non-None if the client is communicating with a mongos
+    # instance. For mongo 3.0 we have to check the process name for 'mongos'.
+    if not stat.get('sharding') and 'mongos' not in stat.get('process', ''):
+        return False
+    if database.command('collstats', collection.name).get('sharded'):
+        return 'present'
+    try:
+        client.admin.command('enableSharding', database.name)
+    except pymongo.errors.OperationFailure:
+        # sharding may already be enabled
+        pass
+    try:
+        client.admin.command(
+            'shardCollection', '%s.%s' % (database.name, collection.name),
+            key={keyname: 1})
+        return True
+    except pymongo.errors.OperationFailure:
+        pass
+    return False
 
 
 class GridFsAssetstoreAdapter(AbstractAssetstoreAdapter):
@@ -67,8 +110,7 @@ class GridFsAssetstoreAdapter(AbstractAssetstoreAdapter):
 
         try:
             chunkColl = getDbConnection(
-                doc.get('mongohost', None), doc.get('replicaset', None),
-                autoRetry=False,
+                doc.get('mongohost'), doc.get('replicaset'), autoRetry=False,
                 serverSelectionTimeoutMS=10000)[doc['db']].chunk
             _ensureChunkIndices(chunkColl)
         except pymongo.errors.ServerSelectionTimeoutError as e:
@@ -79,31 +121,52 @@ class GridFsAssetstoreAdapter(AbstractAssetstoreAdapter):
 
     @staticmethod
     def fileIndexFields():
-        return ['sha512']
+        return ['sha512', 'chunkUuid']
 
     def __init__(self, assetstore):
         """
         :param assetstore: The assetstore to act on.
         """
         super(GridFsAssetstoreAdapter, self).__init__(assetstore)
+        recent = False
         try:
-            self.chunkColl = getDbConnection(
-                self.assetstore.get('mongohost', None),
-                self.assetstore.get('replicaset', None)
-            )[self.assetstore['db']].chunk
-            _ensureChunkIndices(self.chunkColl)
+            # Guard in case the connectionArgs is unhashable
+            key = (self.assetstore.get('mongohost'),
+                   self.assetstore.get('replicaset'),
+                   self.assetstore.get('shard'))
+            if key in _recentConnections:
+                recent = (time.time() - _recentConnections[key]['created'] <
+                          RECENT_CONNECTION_CACHE_TIME)
+        except TypeError:
+            key = None
+        try:
+            # MongoClient automatically reuses connections from a pool, but we
+            # want to avoid redoing ensureChunkIndices each time we get such a
+            # connection.
+            client = getDbConnection(self.assetstore.get('mongohost'),
+                                     self.assetstore.get('replicaset'),
+                                     quiet=recent)
+            self.chunkColl = MongoProxy(client[self.assetstore['db']].chunk)
+            if not recent:
+                _ensureChunkIndices(self.chunkColl)
+                if self.assetstore.get('shard') == 'auto':
+                    _setupSharding(self.chunkColl)
+                if key is not None:
+                    if len(_recentConnections) >= RECENT_CONNECTION_CACHE_MAX_SIZE:
+                        _recentConnections.clear()
+                    _recentConnections[key] = {
+                        'created': time.time()
+                    }
         except pymongo.errors.ConnectionFailure:
             logger.error('Failed to connect to GridFS assetstore %s',
                          self.assetstore['db'])
             self.chunkColl = 'Failed to connect'
             self.unavailable = True
-            return
         except pymongo.errors.ConfigurationError:
             logger.exception('Failed to configure GridFS assetstore %s',
                              self.assetstore['db'])
             self.chunkColl = 'Failed to configure'
             self.unavailable = True
-            return
 
     def initUpload(self, upload):
         """

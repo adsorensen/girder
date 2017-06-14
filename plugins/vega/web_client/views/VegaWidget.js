@@ -1,11 +1,13 @@
+import $ from 'jquery';
+
+import vg from 'vega';
+
 import View from 'girder/views/View';
 import { AccessType } from 'girder/constants';
 import { restRequest } from 'girder/rest';
 
 import VegaWidgetTemplate from '../templates/vegaWidget.pug';
 import '../stylesheets/vegaWidget.styl';
-
-import vg from 'vega';
 
 var VegaWidget = View.extend({
     initialize: function (settings) {
@@ -24,7 +26,7 @@ var VegaWidget = View.extend({
             $('#g-app-body-container')
                 .append(VegaWidgetTemplate());
             restRequest({
-                path: '/api/v1/item/' + this.item.get('_id') + '/download',
+                path: '/api/v1/item/' + this.item.get('_id') + '/download'
             })
                 .done(function (spec) {
                     vg.parse.spec(spec, function (chart) {

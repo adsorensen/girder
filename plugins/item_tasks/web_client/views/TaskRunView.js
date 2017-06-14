@@ -1,7 +1,6 @@
+import $ from 'jquery';
 import _ from 'underscore';
 
-import WidgetCollection from '../collections/WidgetCollection';
-import ControlsPanel from './ControlsPanel';
 import View from 'girder/views/View';
 import FolderModel from 'girder/models/FolderModel';
 import ItemModel from 'girder/models/ItemModel';
@@ -11,6 +10,9 @@ import { renderMarkdown } from 'girder/misc';
 
 import template from '../templates/taskRun.pug';
 import '../stylesheets/taskRun.styl';
+import WidgetCollection from '../collections/WidgetCollection';
+
+import ControlsPanel from './ControlsPanel';
 
 const TaskRunView = View.extend({
     events: {
@@ -25,8 +27,8 @@ const TaskRunView = View.extend({
         this._outputWidgets = new WidgetCollection();
         this._initialValues = settings.initialValues || null;
 
-        const inputs = this._initialValues && this._initialValues.inputs || {};
-        const outputs = this._initialValues && this._initialValues.outputs || {};
+        const inputs = (this._initialValues && this._initialValues.inputs) || {};
+        const outputs = (this._initialValues && this._initialValues.outputs) || {};
 
         // Build all the widget models from the task IO spec
         this._inputWidgets.add(

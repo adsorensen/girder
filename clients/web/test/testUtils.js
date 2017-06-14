@@ -2,7 +2,7 @@
  * Contains utility functions used in the Girder Jasmine tests.
  */
 
-var girderTest = girderTest || {};
+var girderTest = window.girderTest || {};
 
 window.alert = function (msg) {
     // We want to have no alerts in the code-base; alerts block phantomjs and
@@ -626,23 +626,17 @@ girderTest.waitForDialog = function (desc) {
 /**
  * Contains a promise that is resolved when all requested sources are loaded.
  */
-girderTest.promise = $.when();
+girderTest.promise = $.Deferred().resolve().promise();
 
 /**
  * Import a javascript file and.
  */
 girderTest.addScript = function (url) {
-    var defer = new $.Deferred();
-    girderTest.promise.then(function () {
-        $.getScript(url).done(function () {
-            defer.resolve();
-        }).fail(function () {
-            defer.reject('Failed to load script: ' + url);
+    girderTest.promise = girderTest.promise
+        .then(_.partial($.getScript, url))
+        .catch(function () {
+            throw 'Failed to load script: ' + url;
         });
-    }).fail(function () {
-        defer.reject.apply(defer, arguments);
-    });
-    girderTest.promise = defer.promise();
 };
 
 /**
@@ -1214,7 +1208,7 @@ $(function () {
     });
     if (specs.length) {
         $.when.apply($, specs)
-            .then(function () {
+            .done(function () {
                 window.jasmine.getEnv().execute();
             });
     }
@@ -1228,7 +1222,7 @@ $(function () {
  */
 girderTest.startApp = function () {
     var defer = new $.Deferred();
-    girderTest.promise.then(function () {
+    girderTest.promise.done(function () {
         /* Track bootstrap transitions.  This is largely a duplicate of the
          * Bootstrap emulateTransitionEnd function, with the only change being
          * our tracking of the transition.  This still relies on the browser
@@ -1255,7 +1249,7 @@ girderTest.startApp = function () {
             parentView: null,
             start: false
         });
-        app.start().then(function () {
+        app.start().done(function () {
             girder.events.trigger('g:appload.after');
             defer.resolve(app);
         });

@@ -1,3 +1,4 @@
+import $ from 'jquery';
 import _ from 'underscore';
 
 import PaginateWidget from 'girder/views/widgets/PaginateWidget';
@@ -10,13 +11,13 @@ import { getCurrentUser } from 'girder/auth';
 import { SORT_DESC } from 'girder/constants';
 
 import JobCollection from '../collections/JobCollection';
-import JobListWidgetTemplate from '../templates/jobListWidget.pug';
-import JobListTemplate from '../templates/jobList.pug';
 import JobStatus from '../JobStatus';
+import JobListWidgetTemplate from '../templates/jobListWidget.pug';
+import '../stylesheets/jobListWidget.styl';
+import JobListTemplate from '../templates/jobList.pug';
+
 import CheckBoxMenu from './CheckBoxMenu';
 import JobGraphWidget from './JobGraphWidget';
-
-import '../stylesheets/jobListWidget.styl';
 
 var JobListWidget = View.extend({
     events: {
@@ -151,7 +152,7 @@ var JobListWidget = View.extend({
     ], 'COLUMN_ALL'),
 
     render: function () {
-        this.$el.html(JobListWidgetTemplate($.extend({}, this, {
+        this.$el.html(JobListWidgetTemplate(_.extend({}, this, {
             pageSize: this.collection.pageLimit
         })));
 
@@ -235,7 +236,7 @@ var JobListWidget = View.extend({
 
     _jobCreated: function (event) {
         this._fetchWithFilter()
-            .then(() => {
+            .done(() => {
                 this._highlightRecordIfOnList(event.data._id);
             });
     },
@@ -248,25 +249,18 @@ var JobListWidget = View.extend({
     },
 
     _fetchWithFilter() {
-        return new Promise((resolve, reject) => {
-            var filter = {};
-            if (this.userId) {
-                filter.userId = this.userId;
-            }
-            if (this.typeFilter) {
-                filter.types = JSON.stringify(this.typeFilter);
-            }
-            if (this.statusFilter) {
-                filter.statuses = JSON.stringify(this.statusFilter);
-            }
-            this.collection.params = filter;
-            this.collection.fetch({}, true);
-            var callback = () => {
-                this.collection.off('g:changed', callback);
-                resolve();
-            };
-            this.collection.on('g:changed', callback);
-        });
+        var filter = {};
+        if (this.userId) {
+            filter.userId = this.userId;
+        }
+        if (this.typeFilter) {
+            filter.types = JSON.stringify(this.typeFilter);
+        }
+        if (this.statusFilter) {
+            filter.statuses = JSON.stringify(this.statusFilter);
+        }
+        this.collection.params = filter;
+        return this.collection.fetch({}, true);
     }
 });
 

@@ -1,3 +1,4 @@
+import $ from 'jquery';
 import _ from 'underscore';
 
 import Model from 'girder/models/Model';
@@ -67,7 +68,7 @@ var AccessControlledModel = Model.extend({
             }, this));
         } else {
             this.trigger('g:accessFetched');
-            return $.when(this.get('access'));
+            return $.Deferred().resolve(this.get('access')).promise();
         }
     }
 });

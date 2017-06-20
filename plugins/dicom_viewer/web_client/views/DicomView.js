@@ -65,6 +65,14 @@ var DicomView = View.extend({
             this.autoLevels();
             this.iren.render();
         },
+        'click .dicom-label-button': function (event) {
+            event.preventDefault();
+            this.addLabel();
+        },
+        'click .dicom-label-remove-button': function (event) {
+            event.preventDefault();
+            this.removeLabel();
+        },
         'input .dicom-slider': _.debounce(function (event) {
             this.setIndex(event.target.value);
         }, 10)
@@ -82,6 +90,43 @@ var DicomView = View.extend({
         this.tagCache = {};
         this.xhr = null;
         this.loadFileList();
+        this.labels = [];
+    },
+
+    removeLabel: function () {
+        var text = document.getElementById("labelText").value;
+        text += "<br>";
+        if (contains(text, this.labels))
+        {
+            var index = this.labels.getPosition
+        }
+    },
+
+    contains: function (text, labels)
+    {
+        for(var i=0; i<labels.length; i++)
+        {
+            if(labels[i] === text)
+            {
+                return true;
+            }
+        }
+        return false;
+    },
+
+    addLabel: function () {
+        var list = [];
+        var i;
+        var text = document.getElementById("labelText").value;
+        this.labels.push(text);
+        var temp = "";
+        //document.write(text);
+        for(i=0; i < this.labels.length; i++)
+        {
+            temp += this.labels[i] + '<br>';
+        }
+        document.getElementById("flag").innerHTML = temp;
+        document.getElementById("labelText").value= "";
     },
 
     setIndex: function (index) {

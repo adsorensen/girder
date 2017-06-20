@@ -26,5 +26,11 @@
           i.icon-search
         button.dicom-auto-levels.btn.btn-sm.btn-default(title="Auto Levels")
           i.icon-ajust
+      | Label: 
+      input#labelText.dicom-label-text.btn.btn-sm.btn-default(type='text', title="Labels Text")
+      button#addLabel.dicom-label-button.btn.btn-sm.btn-default(onclick='myFunction()', title="Label Add Button") Add Label
+      button#removeLabel.dicom-label-remove-button.btn.btn-sm.btn-default(title="Label Remove Button") Remove Label
+      p Labels to add:
+      p#flag
   .g-dicom-right
     .g-dicom-tags

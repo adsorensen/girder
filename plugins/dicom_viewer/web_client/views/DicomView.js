@@ -73,6 +73,10 @@ var DicomView = View.extend({
             event.preventDefault();
             this.removeLabel();
         },
+        'click .dicom-save-button': function (event) {
+            event.preventDefault();
+            this.saveFile();
+        },
         'input .dicom-slider': _.debounce(function (event) {
             this.setIndex(event.target.value);
         }, 10)
@@ -93,20 +97,50 @@ var DicomView = View.extend({
         this.labels = [];
     },
 
-    removeLabel: function () {
-        var text = document.getElementById("labelText").value;
-        text += "<br>";
-        if (contains(text, this.labels))
-        {
-            var index = this.labels.getPosition
-        }
+    saveFile: function () {
+        // var text = typeof this.imageData;
+        // alert("image data type: "text);
+        // text = typeof this.imageDataCache;
+        // alert("imagedatacache: " text);
+        // var i;
+        // var temp = "";
+        // for (i = 0; i < this.files.length; i++)
+        // {
+        //     temp += this.files[i] + '<br>';
+        // }
+        // document.getElementById("flag").innerHTML = temp;
+        // document.getElementById("labelText").value= "";
     },
 
-    contains: function (text, labels)
-    {
-        for(var i=0; i<labels.length; i++)
+    removeLabel: function () {
+        var text = document.getElementById("labelText").value;
+        if(text != "")
         {
-            if(labels[i] === text)
+            if (this.contains(text))
+            {
+                var index = this.labels.indexOf(text);
+                this.labels.splice(index, 1);
+                alert(text + " was removed from the labels");
+                this.printLabels();
+            }
+            else
+            {
+                alert("Didn't find \"" + text + "\" to remove");
+            }
+        }
+
+        var x = document.getElementById("labels");
+        x.remove(x.selectedIndex);
+        alert(x + " was removed.....");
+
+
+    },
+
+    contains: function (text) {
+        //text = text.toLowerCase;
+        for(var i=0; i<this.labels.length; i++)
+        {
+            if(this.labels[i].toLowerCase() === text.toLowerCase())
             {
                 return true;
             }
@@ -115,17 +149,31 @@ var DicomView = View.extend({
     },
 
     addLabel: function () {
-        var list = [];
-        var i;
         var text = document.getElementById("labelText").value;
-        this.labels.push(text);
-        var temp = "";
-        //document.write(text);
+        if(this.contains(text))
+        {
+            alert(text + " has already been added");
+        }
+        else
+        {
+            var select = document.getElementById('labels');
+            var opt = document.createElement('option');
+            opt.value = text;
+            opt.innerHTML = text;
+            select.appendChild(opt);
+            this.labels.push(text);
+        }
+        this.printLabels();
+    },
+
+    printLabels: function () {
+        var labelsToPrint = "";
+        var i;
         for(i=0; i < this.labels.length; i++)
         {
-            temp += this.labels[i] + '<br>';
+            labelsToPrint += this.labels[i] + '<br>';
         }
-        document.getElementById("flag").innerHTML = temp;
+        document.getElementById("flag").innerHTML = labelsToPrint;
         document.getElementById("labelText").value= "";
     },
 

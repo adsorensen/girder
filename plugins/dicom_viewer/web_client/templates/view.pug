@@ -28,9 +28,11 @@
           i.icon-ajust
       | Label: 
       input#labelText.dicom-label-text.btn.btn-sm.btn-default(type='text', title="Labels Text")
-      button#addLabel.dicom-label-button.btn.btn-sm.btn-default(onclick='myFunction()', title="Label Add Button") Add Label
+      button#addLabel.dicom-label-button.btn.btn-sm.btn-default(title="Label Add Button") Add Label
       button#removeLabel.dicom-label-remove-button.btn.btn-sm.btn-default(title="Label Remove Button") Remove Label
+      button#saveFile.dicom-save-button.btn.btn-sm.btn-default(title="Save") Save
       p Labels to add:
+      select#labels(size='5')
       p#flag
   .g-dicom-right
     .g-dicom-tags

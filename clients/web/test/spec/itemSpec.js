@@ -1,6 +1,3 @@
-/**
- * Start the girder backbone app.
- */
 girderTest.startApp();
 
 /* Show the item edit dialog and click a button.
@@ -221,7 +218,7 @@ describe('Test item creation, editing, and deletion', function () {
         girderTest.waitForDialog();
 
         runs(function () {
-            _prepareTestUpload();
+            girderTest._prepareTestUpload();
             girderTest._uploadDataExtra = 0;
             girderTest.sendFile('clients/web/test/testFile.txt');
         });

@@ -115,7 +115,7 @@ route for ``GET /item/:id/cat`` to the system,
     from girder.api.rest import boundHandler
 
     @access.public
-    @boundHandler()
+    @boundHandler
     def myHandler(self, id, params):
         self.requireParams('cat', params)
 
@@ -159,7 +159,7 @@ example:
         .param('id', 'The item ID', paramType='path')
         .param('cat', 'The cat value.', required=False)
         .errorResponse())
-    def myHandler(id, cat, params):
+    def myHandler(id, cat):
         return {
            'itemId': id,
            'cat': cat
@@ -173,10 +173,10 @@ and type coercion for you, with the benefit of ensuring that the documentation o
 the endpoint inputs matches their actual behavior. Documented parameters will be
 sent to the method as kwargs (so the order you declare them in the header doesn't matter).
 Any additional parameters that were passed but not listed in the ``Description`` object
-will be contained in the ``params`` kwarg as a dictionary. The validation of required
-parameters, coercion to the correct data type, and setting default values is all
-handled automatically for you based on the parameter descriptions in the ``Description``
-object passed. Two special methods of the ``Description`` object can be used for
+will be contained in the ``params`` kwarg as a dictionary, if that parameter is present. The
+validation of required parameters, coercion to the correct data type, and setting default
+values is all handled automatically for you based on the parameter descriptions in the
+``Description`` object passed. Two special methods of the ``Description`` object can be used for
 additional behavior control: :py:func:`girder.api.describe.Description.modelParam` and
 :py:func:`girder.api.describe.Description.jsonParam`.
 
@@ -909,7 +909,37 @@ Testing Client-Side Code
 Web client components may also be tested, using the
 `Jasmine 1.3 test framework <https://jasmine.github.io/1.3/introduction>`_.
 
-For example, the cats plugin would define tests in a ``plugin_tests/catSpec.js`` file.
+At the start of a plugin client test file, the built plugin files must be explicitly loaded,
+typically with the ``girderTest.importPlugin`` function.
+
+.. note:: Plugin dependency resolution will not take place when loading built plugin files in the
+          test environment. If your plugin has dependencies on other Girder plugins, you should
+          make multiple calls to ``girderTest.importPlugin``, loading any dependant plugins in
+          topologically sorted order, before loading your plugin with ``girderTest.importPlugin``
+          last.
+
+If the plugin test requires an instance of the Girder client app to be running, it can be
+started with ``girderTest.startApp()`` immediately after plugins are imported. Plugin tests that
+perform only unit tests or standalone instantiation of views may be able to skip starting the Girder
+client app.
+
+Jasmine specs (defined with ``it``) are not run until the plugin (and app, if started) are fully
+loaded, so they should be defined directly inside a suite (defined with ``describe``) at the
+top-level.
+
+For example, the cats plugin would define tests in a ``plugin_tests/catSpec.js`` file, like:
+
+.. code-block:: javascript
+
+    girderTest.importPlugin('cats');
+    girderTest.startApp();
+
+    describe("Test the cats plugin", function() {
+        it("tests some new functionality", function() {
+            ...
+        });
+    });
+
 
 Using External Data Artifacts
 *****************************
@@ -952,18 +982,18 @@ template files with ``add_puglint_test``. For example:
 
     add_standard_plugin_tests(NO_CLIENT)
     add_eslint_test(js_static_analysis_cats "${PROJECT_SOURCE_DIR}/plugins/cats/web_client"
-        ESLINT_CONFIG_FILE "${PROJECT_SOURCE_DIR}/plugins/cats/.eslintrc")
+        ESLINT_CONFIG_FILE "${PROJECT_SOURCE_DIR}/plugins/cats/.eslintrc.json")
     add_puglint_test(cats "${PROJECT_SOURCE_DIR}/plugins/cats/web_client/templates")
 
 You can `configure ESLint <http://eslint.org/docs/user-guide/configuring.html>`_ inside your
-``.eslintrc`` file however you choose.  For example, to extend Girder's own configuration to add
-a new global variable ``cats`` and stop requiring semicolons to terminate statements, you can put
-the following in your ``.eslintrc``:
+``.eslintrc.json`` file however you choose.  For example, to extend Girder's own configuration to
+add a new global variable ``cats`` and stop requiring semicolons to terminate statements, you can
+put the following in your ``.eslintrc.json``:
 
 .. code-block:: javascript
 
     {
-        "extends": "../../.eslintrc",
+        "extends": "../../.eslintrc.json",
         "globals": {
             "cats": true
         },

@@ -1,15 +1,9 @@
-/* globals girderTest, describe, it, runs, expect, waitsFor */
-
-girderTest.addCoveredScripts([
-    '/clients/web/static/built/plugins/hashsum_download/plugin.min.js'
-]);
-
-girder.events.trigger('g:appload.before');
-var app = new girder.views.App({
-    el: 'body',
-    parentView: null
-});
-girder.events.trigger('g:appload.after');
+girderTest.importPlugin('hashsum_download');
+var app;
+girderTest.startApp()
+    .done(function (startedApp) {
+        app = startedApp;
+    });
 
 describe('Unit test the file view augmentation', function () {
     var file;

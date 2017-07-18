@@ -1,9 +1,4 @@
-/* globals girderTest, describe, it, runs, expect, waitsFor */
-
-girderTest.addCoveredScripts([
-    '/clients/web/static/built/plugins/curation/plugin.min.js'
-]);
-
+girderTest.importPlugin('curation');
 girderTest.startApp();
 
 function _goToCurationDialog() {

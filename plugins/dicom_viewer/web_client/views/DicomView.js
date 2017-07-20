@@ -77,6 +77,10 @@ var DicomView = View.extend({
             event.preventDefault();
             this.saveFile();
         },
+        'keypress .dicom-label-text': function (event) {
+            //event.preventDefault();
+            //this.autoFunction();
+        },
         'input .dicom-slider': _.debounce(function (event) {
             this.setIndex(event.target.value);
         }, 10)
@@ -97,19 +101,24 @@ var DicomView = View.extend({
         this.labels = [];
     },
 
+    autoFunction: function() {
+        alert("hi there");
+    },
+
+    autoFunction2: function() {
+        alert("aldfjdlkj");
+    },
+
     saveFile: function () {
-        // var text = typeof this.imageData;
-        // alert("image data type: "text);
-        // text = typeof this.imageDataCache;
-        // alert("imagedatacache: " text);
-        // var i;
-        // var temp = "";
-        // for (i = 0; i < this.files.length; i++)
-        // {
-        //     temp += this.files[i] + '<br>';
-        // }
-        // document.getElementById("flag").innerHTML = temp;
-        // document.getElementById("labelText").value= "";
+
+        var x = document.getElementById("labels");
+        var txt = "";
+        var i;
+        for (i = 0; i < x.length - 1; i++) {
+            txt = txt + x.options[i].text + ", ";
+        }
+        txt = txt + x.options[x.length - 1].text;
+        alert(txt);
     },
 
     removeLabel: function () {
@@ -128,12 +137,9 @@ var DicomView = View.extend({
                 alert("Didn't find \"" + text + "\" to remove");
             }
         }
-
         var x = document.getElementById("labels");
         x.remove(x.selectedIndex);
-        alert(x + " was removed.....");
-
-
+        //alert(x + " was removed.....");
     },
 
     contains: function (text) {

@@ -1,8 +1,3 @@
-/* globals girderTest, runs, waitsFor, expect, describe, it */
-
-/**
- * Start the girder backbone app.
- */
 girderTest.startApp();
 
 function _setProgress(test, duration, resourceId, resourceName) {

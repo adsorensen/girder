@@ -1,6 +1,3 @@
-/**
- * Start the girder backbone app.
- */
 girderTest.startApp();
 
 describe('Create an admin and non-admin user', function () {
@@ -56,7 +53,7 @@ describe('Test the settings page', function () {
     it('Login as admin', girderTest.login('admin', 'Admin', 'Admin', 'adminpassword!'));
     it('Go to settings page', function () {
         runs(function () {
-            $("a.g-nav-link[g-target='admin']").click();
+            $('a.g-nav-link[g-target="admin"]').click();
         });
 
         waitsFor(function () {
@@ -193,7 +190,7 @@ describe('Test the assetstore page', function () {
         it('Create, switch to, and delete a ' + assetstore + ' assetstore', function () {
             /* create the assetstore */
             runs(function () {
-                $("[data-target='#" + tab + "']").click();
+                $('[data-target="#' + tab + '"]').click();
             });
             waitsFor(function () {
                 return $('#' + tab + ' .g-new-assetstore-submit:visible').length > 0;
@@ -291,7 +288,7 @@ describe('Test the assetstore page', function () {
 
             /* navigate away and back */
             runs(function () {
-                $("a.g-nav-link[g-target='admin']").click();
+                $('a.g-nav-link[g-target="admin"]').click();
             });
             waitsFor(function () {
                 return $('.g-assetstore-config').length > 0;
@@ -460,39 +457,8 @@ describe('Test the assetstore page', function () {
         });
 
         waitsFor(function () {
-            return $('.g-folder-list-entry').text().indexOf('prefix') !== -1;
+            return $('.g-empty-parent-message').length > 0;
         }, 'user folders to show');
-
-        runs(function () {
-            _.each($('.g-folder-list-link'), function (link) {
-                if ($(link).text() === 'prefix') {
-                    $(link).click();
-                }
-            });
-        });
-
-        waitsFor(function () {
-            return $('.g-item-list-link').text().indexOf('test') !== -1;
-        }, 'item to appear in the hierarchy widget');
-
-        runs(function () {
-            $('.g-item-list-link').click();
-        });
-
-        waitsFor(function () {
-            return $('.g-file-list-link').length === 1;
-        }, 'item page to render');
-
-        // Delete the containing folder so we can delete the assetstore
-        runs(function () {
-            privateFolder.on('g:deleted', function () {
-                privateFolder = null;
-            }).destroy();
-        });
-
-        waitsFor(function () {
-            return privateFolder === null;
-        }, 'private folder to be deleted');
 
         runs(function () {
             window.location = '#assetstores';
@@ -511,11 +477,11 @@ describe('Test the assetstore page', function () {
         girderTest.login('admin', 'Admin', 'Admin', 'adminpassword!')();
 
         runs(function () {
-            $("a.g-nav-link[g-target='admin']").click();
+            $('a.g-nav-link[g-target="admin"]').click();
         });
 
         runs(function () {
-            $("a.g-nav-link[g-target='admin']").click();
+            $('a.g-nav-link[g-target="admin"]').click();
         });
 
         waitsFor(function () {
@@ -604,7 +570,7 @@ describe('Test the plugins page', function () {
     it('Login as admin', girderTest.login('admin', 'Admin', 'Admin', 'adminpassword!'));
     it('Go to plugins page', function () {
         runs(function () {
-            $("a.g-nav-link[g-target='admin']").click();
+            $('a.g-nav-link[g-target="admin"]').click();
         });
         waitsFor(function () {
             return $('.g-plugins-config').length > 0;
@@ -671,7 +637,7 @@ describe('Test the plugins page', function () {
     });
     it('Go away and back to plugins page', function () {
         runs(function () {
-            $("a.g-nav-link[g-target='admin']").click();
+            $('a.g-nav-link[g-target="admin"]').click();
         });
         waitsFor(function () {
             return $('.g-plugins-config').length > 0;

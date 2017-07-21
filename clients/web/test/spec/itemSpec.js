@@ -1,6 +1,3 @@
-/**
- * Start the girder backbone app.
- */
 girderTest.startApp();
 
 /* Show the item edit dialog and click a button.
@@ -147,7 +144,7 @@ describe('Test item creation, editing, and deletion', function () {
         });
 
         runs(function () {
-            $("a.g-user-link:contains('Not Admin')").click();
+            $('a.g-user-link:contains("Not Admin")').click();
         });
 
         waitsFor(function () {
@@ -156,7 +153,7 @@ describe('Test item creation, editing, and deletion', function () {
 
         // check for actions menu
         runs(function () {
-            expect($("button:contains('Actions')").length).toBe(1);
+            expect($('button:contains("Actions")').length).toBe(1);
         });
     });
 
@@ -168,7 +165,7 @@ describe('Test item creation, editing, and deletion', function () {
 
     it('view the users on the user page and click on one', function () {
         runs(function () {
-            $("a.g-user-link:contains('Not Admin')").click();
+            $('a.g-user-link:contains("Not Admin")').click();
         });
 
         waitsFor(function () {
@@ -221,7 +218,7 @@ describe('Test item creation, editing, and deletion', function () {
         girderTest.waitForDialog();
 
         runs(function () {
-            _prepareTestUpload();
+            girderTest._prepareTestUpload();
             girderTest._uploadDataExtra = 0;
             girderTest.sendFile('clients/web/test/testFile.txt');
         });

@@ -26,7 +26,7 @@ import posixpath
 import six
 
 import girder.events
-from girder import constants, logprint, __version__
+from girder import constants, logprint, __version__, logStdoutStderr
 from girder.utility import plugin_utilities, model_importer
 from girder.utility import config
 from . import webroot
@@ -145,7 +145,8 @@ def configureServer(test=False, plugins=None, curConfig=None):
             'mode': 'testing',
             'api_root': 'api/v1',
             'static_root': 'static',
-            'api_static_root': '../static'
+            'api_static_root': '../static',
+            'cherrypy_server': True
         }})
 
     mode = curConfig['server']['mode'].lower()
@@ -224,6 +225,8 @@ def setup(test=False, plugins=None, curConfig=None):
     :param plugins: List of plugins to enable.
     :param curConfig: The config object to update.
     """
+    logStdoutStderr()
+
     pluginWebroots = plugin_utilities.getPluginWebroots()
     girderWebroot, appconf = configureServer(test, plugins, curConfig)
     routeTable = loadRouteTable(reconcileRoutes=True)

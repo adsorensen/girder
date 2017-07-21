@@ -1,9 +1,4 @@
-/* globals girderTest, describe, it, runs, expect, waitsFor */
-
-girderTest.addCoveredScripts([
-    '/clients/web/static/built/plugins/curation/plugin.min.js'
-]);
-
+girderTest.importPlugin('curation');
 girderTest.startApp();
 
 function _goToCurationDialog() {
@@ -56,7 +51,7 @@ describe('test the curation ui', function () {
         });
         runs(function () {
             $('#g-curation-enable:visible').click();
-            $("a[data-dismiss='modal']:visible").click();
+            $('a[data-dismiss="modal"]:visible').click();
         });
         waitsFor(function () {
             return $('.g-curation-summary:visible').length === 0;
@@ -76,7 +71,7 @@ describe('test the curation ui', function () {
 
         runs(function () {
             $('#g-curation-request:visible').click();
-            $("a[data-dismiss='modal']:visible").click();
+            $('a[data-dismiss="modal"]:visible').click();
         });
         waitsFor(function () {
             return $('.g-curation-summary:visible').length === 0;
@@ -96,7 +91,7 @@ describe('test the curation ui', function () {
 
         runs(function () {
             $('#g-curation-approve:visible').click();
-            $("a[data-dismiss='modal']:visible").click();
+            $('a[data-dismiss="modal"]:visible').click();
         });
         waitsFor(function () {
             return $('.g-curation-summary:visible').length === 0;

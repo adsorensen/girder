@@ -1,7 +1,7 @@
 |logo| Girder |build-status| |docs-status| |license-badge| |gitter-badge| |codecov-badge|
 =========================================================================================
 
-**Data Management Platform**
+**DATA Management Platform**
 
 Girder is a free and open source web-based data management platform developed by
 `Kitware <https://kitware.com>`_ as part of the `Resonant <http://resonant.kitware.com>`_

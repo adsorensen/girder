@@ -11,10 +11,10 @@
       .modal-body
         .form-group
           label.control-label(for="g-api-key-name") Name
-          input.input-sm#g-api-key-name.form-control(type="text", placeholder="Enter a name for this API key")
+          input#g-api-key-name.input-sm.form-control(type="text", placeholder="Enter a name for this API key")
         .form-group
           label.control-label(for="g-api-key-token-duration") Token duration in days (optional)
-          input.input-sm#g-api-key-token-duration.form-control(placeholder="Enter number of days")
+          input#g-api-key-token-duration.input-sm.form-control(placeholder="Enter number of days")
 
         label.control-label Permission scope for this key
         .g-scope-selection-container
@@ -28,7 +28,7 @@
               | Only allow specific permissions for this key:
           each tokenScope in userTokenScopes
             .checkbox.disabled
-              label.g-custom-scope-description(title=tokenScope.description)
+              label.g-custom-scope-description(title=tokenScope.description, data-placement='right')
                 input.g-custom-scope-checkbox(type="checkbox", value=tokenScope.id, disabled)
                 span= tokenScope.name
           if user.get('admin')

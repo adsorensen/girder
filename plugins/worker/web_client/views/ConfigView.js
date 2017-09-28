@@ -22,19 +22,23 @@ var ConfigView = View.extend({
             }, {
                 key: 'worker.backend',
                 value: this.$('#g-worker-backend').val().trim()
+            }, {
+                key: 'worker.direct_path',
+                value: this.$('#g-worker-direct-path').is(':checked')
             }]);
         }
     },
 
     initialize: function () {
         restRequest({
-            type: 'GET',
-            path: 'system/setting',
+            method: 'GET',
+            url: 'system/setting',
             data: {
                 list: JSON.stringify([
                     'worker.api_url',
                     'worker.broker',
-                    'worker.backend'
+                    'worker.backend',
+                    'worker.direct_path'
                 ])
             }
         }).done(_.bind(function (resp) {
@@ -42,6 +46,7 @@ var ConfigView = View.extend({
             this.$('#g-worker-api-url').val(resp['worker.api_url']);
             this.$('#g-worker-broker').val(resp['worker.broker']);
             this.$('#g-worker-backend').val(resp['worker.backend']);
+            this.$('#g-worker-direct-path').prop('checked', resp['worker.direct_path']);
         }, this));
     },
 
@@ -63,8 +68,8 @@ var ConfigView = View.extend({
 
     _saveSettings: function (settings) {
         restRequest({
-            type: 'PUT',
-            path: 'system/setting',
+            method: 'PUT',
+            url: 'system/setting',
             data: {
                 list: JSON.stringify(settings)
             },

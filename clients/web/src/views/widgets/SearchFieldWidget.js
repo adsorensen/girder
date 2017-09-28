@@ -11,7 +11,6 @@ import SearchResultsTemplate from 'girder/templates/widgets/searchResults.pug';
 
 import 'girder/stylesheets/widgets/searchFieldWidget.styl';
 
-import 'bootstrap/js/tooltip';
 import 'bootstrap/js/popover';
 
 /**
@@ -126,10 +125,6 @@ var SearchFieldWidget = View.extend({
             currentMode: this.currentMode
         }));
 
-        this.$('[title]').tooltip({
-            placement: 'auto'
-        });
-
         this.$('.g-search-options-button').popover({
             trigger: 'manual',
             html: true,
@@ -195,7 +190,7 @@ var SearchFieldWidget = View.extend({
         this.pending = null;
 
         restRequest({
-            path: 'resource/search',
+            url: 'resource/search',
             data: {
                 q: q,
                 mode: this.currentMode,

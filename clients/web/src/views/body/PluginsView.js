@@ -15,7 +15,6 @@ import PluginsTemplate from 'girder/templates/body/plugins.pug';
 import 'girder/utilities/jquery/girderEnable';
 import 'girder/stylesheets/body/plugins.styl';
 
-import 'bootstrap/js/tooltip';
 import 'bootstrap-switch'; // /dist/js/bootstrap-switch.js',
 import 'bootstrap-switch/dist/css/bootstrap3/bootstrap-switch.css';
 
@@ -57,6 +56,8 @@ var PluginsView = View.extend({
     initialize: function (settings) {
         cancelRestRequests('fetch');
         if (settings.all && settings.enabled) {
+            this.cherrypyServer = (_.has(settings, 'cherrypyServer')
+                                   ? settings.cherrypyServer : true);
             this.enabled = settings.enabled;
             this.allPlugins = settings.all;
             this.failed = _.has(settings, 'failed') ? settings.failed : null;
@@ -64,12 +65,12 @@ var PluginsView = View.extend({
         } else {
             const promises = [
                 restRequest({
-                    path: 'system/plugins',
-                    type: 'GET'
+                    url: 'system/plugins',
+                    method: 'GET'
                 }).then((resp) => resp),
                 restRequest({
-                    path: 'system/configuration',
-                    type: 'GET',
+                    url: 'system/configuration',
+                    method: 'GET',
                     data: {
                         section: 'server',
                         key: 'cherrypy_server'
@@ -113,40 +114,37 @@ var PluginsView = View.extend({
             allPlugins: this._sortPlugins(this.allPlugins)
         }));
 
-        var view = this;
         this.$('.g-plugin-switch').bootstrapSwitch()
-          .off('switchChange.bootstrapSwitch')
-          .on('switchChange.bootstrapSwitch', function (event, state) {
-              var plugin = $(event.currentTarget).attr('key');
-              if (state === true) {
-                  view.enabled.push(plugin);
-              } else {
-                  var idx;
-                  while ((idx = view.enabled.indexOf(plugin)) >= 0) {
-                      view.enabled.splice(idx, 1);
-                  }
-              }
-              $('button.g-rebuild-and-restart').addClass('btn-danger');
-              $('.g-plugin-rebuild-restart-text').addClass('show');
-              view._updatePlugins();
-          });
-        this.$('.g-plugin-config-link').tooltip({
-            container: this.$el,
-            animation: false,
-            placement: 'bottom',
-            delay: { show: 100 }
-        });
-        this.$('.g-plugin-list-item-experimental-notice').tooltip({
-            container: this.$el,
-            animation: false,
-            delay: { show: 100 }
-        });
-        this.$('.g-plugin-list-item-failed-notice').tooltip({
-            title: 'Click to see traceback',
-            container: this.$el,
-            animation: false,
-            delay: { show: 100 }
-        });
+            .off('switchChange.bootstrapSwitch')
+            .on('switchChange.bootstrapSwitch', (event, state) => {
+                var plugin = $(event.currentTarget).attr('key');
+                if (state === true) {
+                    this.enabled.push(plugin);
+                } else {
+                    var idx;
+                    while ((idx = this.enabled.indexOf(plugin)) >= 0) {
+                        this.enabled.splice(idx, 1);
+                    }
+                }
+                this.$('button.g-rebuild-and-restart').addClass('btn-danger');
+
+                if (this.cherrypyServer) {
+                    this.$('.g-plugin-rebuild-restart-text').addClass('show');
+                }
+
+                if (!this.cherrypyServer && !_.has(this, 'displayedCherrypyNotification')) {
+                    this.displayedCherrypyNotification = true;
+
+                    events.trigger('g:alert', {
+                        text: `Enabling and disabling plugins might not take effect until the system administrator has restarted Girder.`,
+                        type: 'info',
+                        timeout: 5000,
+                        icon: 'info'
+                    });
+                }
+
+                this._updatePlugins();
+            });
         this.$('.g-plugin-list-item-failed-notice').popover({
             container: this.$el,
             template: PluginFailedNoticeTemplate()
@@ -192,8 +190,8 @@ var PluginsView = View.extend({
         this.enabled = _.intersection(this.enabled, _.keys(this.allPlugins));
 
         restRequest({
-            path: 'system/plugins',
-            type: 'PUT',
+            url: 'system/plugins',
+            method: 'PUT',
             data: {
                 plugins: JSON.stringify(this.enabled)
             }

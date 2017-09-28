@@ -65,6 +65,22 @@ var DicomView = View.extend({
             this.autoLevels();
             this.iren.render();
         },
+        'click .dicom-label-button': function (event) {
+            event.preventDefault();
+            this.addLabel();
+        },
+        'click .dicom-label-remove-button': function (event) {
+            event.preventDefault();
+            this.removeLabel();
+        },
+        'click .dicom-save-button': function (event) {
+            event.preventDefault();
+            this.saveFile();
+        },
+        'keypress .dicom-label-text': function (event) {
+            //event.preventDefault();
+            //this.autoFunction();
+        },
         'input .dicom-slider': _.debounce(function (event) {
             this.setIndex(event.target.value);
         }, 10)
@@ -82,6 +98,89 @@ var DicomView = View.extend({
         this.tagCache = {};
         this.xhr = null;
         this.loadFileList();
+        this.labels = [];
+    },
+
+    autoFunction: function() {
+        alert("hi there");
+    },
+
+    autoFunction2: function() {
+        alert("aldfjdlkj");
+    },
+
+    saveFile: function () {
+
+        var x = document.getElementById("labels");
+        var txt = "";
+        var i;
+        for (i = 0; i < x.length - 1; i++) {
+            txt = txt + x.options[i].text + ", ";
+        }
+        txt = txt + x.options[x.length - 1].text;
+        alert(txt);
+    },
+
+    removeLabel: function () {
+        var text = document.getElementById("labelText").value;
+        if(text != "")
+        {
+            if (this.contains(text))
+            {
+                var index = this.labels.indexOf(text);
+                this.labels.splice(index, 1);
+                alert(text + " was removed from the labels");
+                this.printLabels();
+            }
+            else
+            {
+                alert("Didn't find \"" + text + "\" to remove");
+            }
+        }
+        var x = document.getElementById("labels");
+        x.remove(x.selectedIndex);
+        //alert(x + " was removed.....");
+    },
+
+    contains: function (text) {
+        //text = text.toLowerCase;
+        for(var i=0; i<this.labels.length; i++)
+        {
+            if(this.labels[i].toLowerCase() === text.toLowerCase())
+            {
+                return true;
+            }
+        }
+        return false;
+    },
+
+    addLabel: function () {
+        var text = document.getElementById("labelText").value;
+        if(this.contains(text))
+        {
+            alert(text + " has already been added");
+        }
+        else
+        {
+            var select = document.getElementById('labels');
+            var opt = document.createElement('option');
+            opt.value = text;
+            opt.innerHTML = text;
+            select.appendChild(opt);
+            this.labels.push(text);
+        }
+        this.printLabels();
+    },
+
+    printLabels: function () {
+        var labelsToPrint = "";
+        var i;
+        for(i=0; i < this.labels.length; i++)
+        {
+            labelsToPrint += this.labels[i] + '<br>';
+        }
+        document.getElementById("flag").innerHTML = labelsToPrint;
+        document.getElementById("labelText").value= "";
     },
 
     setIndex: function (index) {

@@ -29,13 +29,10 @@ For more options for building the web client, run: ::
 Vagrant
 ^^^^^^^
 
-A shortcut to going through the installation steps for development is to use
-`Vagrant <https://www.vagrantup.com>`_ to setup the environment on a
-`VirtualBox <https://www.virtualbox.org>`_ virtual machine. To setup this
-environment run ``vagrant up`` in the root of the repository. This will spin up
-and provision a virtual machine, provided you have Vagrant and VirtualBox
-installed. Vagrant uses `Ansible <https://ansible.com>`_ for provisioning Girder and its various
-dependencies.
+A shortcut to going through the development environment configuration steps is
+to use `Vagrant <https://www.vagrantup.com>`_ to setup the environment on a
+`VirtualBox <https://www.virtualbox.org>`_ virtual machine. For more
+documentation on how to set this up, see `Developer Installation <dev-installation.html>`__
 
 .. seealso::
 
@@ -414,7 +411,8 @@ Web client libraries in Girder core are managed via `npm <https://www.npmjs.com/
 When a new npm package is required, or an existing package is upgraded, the following
 should be done:
 
-1. Ensure that version >=5.3 of npm is installed in your development environment:
+1. Ensure that you are using a Linux development environment (macOS causes npm to produce slightly
+   different outputs) with version >=5.3 of npm installed:
 
    .. code-block:: bash
 
@@ -445,7 +443,7 @@ are stored as releases inside the official
 `github repository <https://github.com/girder/girder/releases>`_. The
 recommended process for generating a new release is described here.
 
-1.  From the target commit, set the desired version number in ``package.json``
+1.  From the target commit, set the desired version number in ``package.json``, ``clients/web/src/package.json``,
     and ``girder/__init__.py``. Create a new commit and note the SHA; this will
     become the release tag.
 
@@ -483,6 +481,10 @@ recommended process for generating a new release is described here.
 9.  Finally, upload the release to PyPI with the following command: ::
 
         python setup.py sdist upload
+
+10. Publish the new girder source package on npm.
+
+        cd clients/web/src && npm publish
 
 .. _releasepythonclientpackage:
 
